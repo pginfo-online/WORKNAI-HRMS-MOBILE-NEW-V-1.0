@@ -60,13 +60,22 @@ export default function PayslipsScreen() {
       const docDir = (FileSystem as any).documentDirectory || (FileSystem as any).cacheDirectory || '';
       const fileUri = `${docDir}${fileName}`;
 
-      // 1. If stored on Cloudinary, download directly via Expo FileSystem
+      let downloaded = false;
+      // 1. If stored on Cloudinary, try download directly via Expo FileSystem
       if (item.salarySlipUrl) {
-        const downloadRes = await FileSystem.downloadAsync(item.salarySlipUrl, fileUri);
-        if (downloadRes.status !== 200) {
-          throw new Error('Cloudinary download returned status ' + downloadRes.status);
+        try {
+          const downloadRes = await FileSystem.downloadAsync(item.salarySlipUrl, fileUri);
+          if (downloadRes.status === 200) {
+            downloaded = true;
+          } else {
+            console.warn(`Cloudinary download returned status ${downloadRes.status}, falling back to backend endpoint.`);
+          }
+        } catch (cdnErr: any) {
+          console.warn('Direct Cloudinary download failed, falling back to backend:', cdnErr?.message || cdnErr);
         }
-      } else {
+      }
+
+      if (!downloaded) {
         // 2. Fallback: fetch from backend endpoint
         const res = await payrollApi.downloadPayslip(item._id);
         if (typeof res.data === 'string') {
