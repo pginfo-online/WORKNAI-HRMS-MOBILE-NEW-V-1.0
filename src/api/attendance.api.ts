@@ -16,7 +16,9 @@ export interface CheckOutData {
 }
 
 export interface CorrectionRequestData {
-  attendanceId: string;
+  attendanceId?: string;
+  date?: string;             // YYYY-MM-DD
+  requestedStatus?: 'P' | 'Half' | 'Coff' | string;
   requestedInTime?: string;  // ISO string
   requestedOutTime?: string; // ISO string
   correctionReason: string;
@@ -42,4 +44,6 @@ export const attendanceApi = {
     client.post('/attendance/correction', data),
   getPendingCorrections: () =>
     client.get('/attendance/corrections/pending'),
+  getMyCorrectionHistory: () =>
+    client.get('/attendance/my-corrections'),
 };

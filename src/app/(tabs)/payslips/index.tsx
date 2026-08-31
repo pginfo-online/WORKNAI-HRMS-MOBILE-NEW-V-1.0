@@ -208,7 +208,7 @@ export default function PayslipsScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <ScreenHeader title="My Payslips" subtitle="Verified Monthly Salary Statements & PDF Downloads" />
+      <ScreenHeader title="My Payslips"/>
 
       {/* Month/Year Filter */}
       <View style={{ marginBottom: 12 }}>

@@ -1,19 +1,24 @@
 import React from 'react';
 import { Tabs } from 'expo-router';
-import { View, StyleSheet, Platform, Text } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useUIStore } from '../../store/ui.store';
 import { colors } from '../../constants/colors';
 
 export default function TabLayout() {
-  const { isDark, theme } = useUIStore();
+  const { isDark } = useUIStore();
   const insets = useSafeAreaInsets();
+
+  // Bottom inset calculation: respect iOS home indicator & Android navigation bar
+  const bottomInset = Math.max(insets.bottom, Platform.OS === 'android' ? 8 : 12);
+  const tabHeight = 56 + bottomInset;
 
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        freezeOnBlur: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: isDark ? '#64748B' : '#94A3B8',
         tabBarShowLabel: true,
@@ -21,13 +26,13 @@ export default function TabLayout() {
           backgroundColor: isDark ? '#0F172A' : '#FFFFFF',
           borderTopColor: isDark ? '#1E293B' : '#F1F5F9',
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 84 + insets.bottom * 0.3 : 66,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 10,
-          paddingTop: 8,
-          elevation: 10,
+          height: tabHeight,
+          paddingBottom: bottomInset,
+          paddingTop: 6,
+          elevation: 12,
           shadowColor: '#000000',
           shadowOffset: { width: 0, height: -4 },
-          shadowOpacity: isDark ? 0.3 : 0.04,
+          shadowOpacity: isDark ? 0.35 : 0.05,
           shadowRadius: 10,
         },
         tabBarLabelStyle: {

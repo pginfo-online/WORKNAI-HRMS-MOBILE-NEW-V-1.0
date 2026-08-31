@@ -11,20 +11,24 @@ interface TaskItemCardProps {
   onToggleComplete: (task: TaskItem) => void;
   onPress?: (task: TaskItem) => void;
   onDelete?: (task: TaskItem) => void;
+  onEdit?: (task: TaskItem) => void;
 }
 
-const PRIORITY_COLORS: Record<TaskPriority, { bg: string; text: string; border: string }> = {
-  Urgent: { bg: '#FEF2F2', text: '#DC2626', border: '#FECACA' },
-  High: { bg: '#FFFBEB', text: '#D97706', border: '#FDE68A' },
-  Medium: { bg: '#EFF6FF', text: '#2563EB', border: '#BFDBFE' },
-  Low: { bg: '#F8FAFC', text: '#64748B', border: '#E2E8F0' },
+const PRIORITY_CONFIG: Record<
+  TaskPriority,
+  { bg: string; text: string; border: string; icon: keyof typeof Ionicons.glyphMap }
+> = {
+  Urgent: { bg: 'rgba(239, 68, 68, 0.1)', text: '#EF4444', border: 'rgba(239, 68, 68, 0.25)', icon: 'alert-circle' },
+  High: { bg: 'rgba(245, 158, 11, 0.1)', text: '#F59E0B', border: 'rgba(245, 158, 11, 0.25)', icon: 'flash' },
+  Medium: { bg: 'rgba(32, 118, 199, 0.1)', text: colors.primary, border: 'rgba(32, 118, 199, 0.25)', icon: 'flag' },
+  Low: { bg: 'rgba(100, 116, 139, 0.1)', text: '#64748B', border: 'rgba(100, 116, 139, 0.2)', icon: 'shield-outline' },
 };
 
-const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string }> = {
-  Completed: { bg: '#DCFCE7', text: '#15803D' },
-  'In Progress': { bg: '#E0F2FE', text: '#0369A1' },
-  Pending: { bg: '#FEF3C7', text: '#B45309' },
-  Assigned: { bg: '#F1F5F9', text: '#475569' },
+const STATUS_CONFIG: Record<TaskStatus, { bg: string; text: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  Completed: { bg: 'rgba(16, 185, 129, 0.12)', text: '#10B981', icon: 'checkmark-circle' },
+  'In Progress': { bg: 'rgba(59, 130, 246, 0.12)', text: '#3B82F6', icon: 'time' },
+  Pending: { bg: 'rgba(245, 158, 11, 0.12)', text: '#F59E0B', icon: 'hourglass-outline' },
+  Assigned: { bg: 'rgba(100, 116, 139, 0.1)', text: '#64748B', icon: 'person-outline' },
 };
 
 export const TaskItemCard: React.FC<TaskItemCardProps> = ({
@@ -32,11 +36,12 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
   onToggleComplete,
   onPress,
   onDelete,
+  onEdit,
 }) => {
   const { theme, isDark } = useUIStore();
   const isCompleted = task.status === 'Completed';
-  const pStyle = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS.Medium;
-  const sStyle = STATUS_COLORS[task.status] || STATUS_COLORS.Assigned;
+  const pConfig = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG.Medium;
+  const sConfig = STATUS_CONFIG[task.status] || STATUS_CONFIG.Assigned;
 
   const handleToggle = () => {
     Haptics.impactAsync(
@@ -46,34 +51,51 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
   };
 
   return (
-    <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={() => onPress && onPress(task)}
+    <View
       style={[
         styles.card,
         {
           backgroundColor: theme.surface,
-          borderColor: isCompleted ? 'rgba(16,185,129,0.3)' : theme.border,
+          borderColor: isCompleted
+            ? isDark
+              ? 'rgba(16, 185, 129, 0.25)'
+              : 'rgba(16, 185, 129, 0.35)'
+            : theme.border,
+          shadowColor: isDark ? '#000000' : '#64748B',
         },
       ]}
     >
       <View style={styles.contentRow}>
-        {/* Checkbox Tick Interaction */}
+        {/* Generous Checkbox Hit Area */}
         <TouchableOpacity
           onPress={handleToggle}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          activeOpacity={0.7}
           style={[
-            styles.checkbox,
+            styles.checkboxWrap,
             {
-              backgroundColor: isCompleted ? colors.success : 'transparent',
-              borderColor: isCompleted ? colors.success : theme.border,
+              backgroundColor: isCompleted
+                ? colors.success
+                : isDark
+                ? 'rgba(255,255,255,0.05)'
+                : '#F8FAFC',
+              borderColor: isCompleted ? colors.success : isDark ? '#334155' : '#CBD5E1',
             },
           ]}
         >
-          {isCompleted && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+          {isCompleted ? (
+            <Ionicons name="checkmark" size={16} color="#FFFFFF" />
+          ) : (
+            <View style={styles.checkboxInner} />
+          )}
         </TouchableOpacity>
 
-        {/* Task Details */}
-        <View style={styles.textContainer}>
+        {/* Task Details Touchable */}
+        <TouchableOpacity
+          style={styles.textContainer}
+          activeOpacity={onPress ? 0.7 : 1}
+          onPress={() => onPress && onPress(task)}
+        >
           <Text
             style={[
               styles.title,
@@ -89,33 +111,34 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
 
           {task.description ? (
             <Text
-              style={[styles.description, { color: theme.textSecondary }]}
+              style={[
+                styles.description,
+                {
+                  color: isCompleted ? theme.textTertiary : theme.textSecondary,
+                  textDecorationLine: isCompleted ? 'line-through' : 'none',
+                },
+              ]}
               numberOfLines={2}
             >
               {task.description}
             </Text>
           ) : null}
 
-          {/* Badges Row */}
+          {/* Badges & Metadata Row */}
           <View style={styles.metaRow}>
             {/* Priority Badge */}
             <View
               style={[
                 styles.badge,
                 {
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : pStyle.bg,
-                  borderColor: pStyle.border,
+                  backgroundColor: pConfig.bg,
+                  borderColor: pConfig.border,
                   borderWidth: 1,
                 },
               ]}
             >
-              <View
-                style={[
-                  styles.priorityDot,
-                  { backgroundColor: pStyle.text },
-                ]}
-              />
-              <Text style={[styles.badgeText, { color: pStyle.text }]}>
+              <Ionicons name={pConfig.icon} size={11} color={pConfig.text} />
+              <Text style={[styles.badgeText, { color: pConfig.text }]}>
                 {task.priority}
               </Text>
             </View>
@@ -125,67 +148,99 @@ export const TaskItemCard: React.FC<TaskItemCardProps> = ({
               style={[
                 styles.badge,
                 {
-                  backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : sStyle.bg,
+                  backgroundColor: sConfig.bg,
                 },
               ]}
             >
-              <Text style={[styles.badgeText, { color: sStyle.text }]}>
+              <Ionicons name={sConfig.icon} size={11} color={sConfig.text} />
+              <Text style={[styles.badgeText, { color: sConfig.text }]}>
                 {task.status}
               </Text>
             </View>
 
-            {/* Due Time */}
+            {/* Target Due Time */}
             {task.dueTime ? (
-              <View style={styles.dueWrap}>
-                <Ionicons name="time-outline" size={12} color={theme.textTertiary} />
+              <View
+                style={[
+                  styles.dueWrap,
+                  {
+                    backgroundColor: isDark ? 'rgba(255,255,255,0.04)' : '#F1F5F9',
+                  },
+                ]}
+              >
+                <Ionicons name="time-outline" size={12} color={theme.textSecondary} />
                 <Text style={[styles.dueText, { color: theme.textSecondary }]}>
                   {task.dueTime}
                 </Text>
               </View>
             ) : null}
-          </View>
-        </View>
 
-        {/* Delete option */}
-        {onDelete && (
-          <TouchableOpacity
-            onPress={() => onDelete(task)}
-            style={styles.deleteBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="trash-outline" size={16} color={colors.error} />
-          </TouchableOpacity>
-        )}
+            {/* Admin Assigned Indicator */}
+            {task.isAdminAssigned && (
+              <View style={[styles.adminBadge, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
+                <Ionicons name="shield-checkmark-outline" size={11} color="#6366F1" />
+                <Text style={styles.adminBadgeText}>Assigned</Text>
+              </View>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Action Buttons (Edit / Delete) */}
+        <View style={styles.actionColumn}>
+          {onEdit && (
+            <TouchableOpacity
+              onPress={() => onEdit(task)}
+              style={styles.iconBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="pencil-outline" size={15} color={theme.textSecondary} />
+            </TouchableOpacity>
+          )}
+
+          {onDelete && (
+            <TouchableOpacity
+              onPress={() => onDelete(task)}
+              style={styles.iconBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="trash-outline" size={15} color={colors.error} />
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
-    </TouchableOpacity>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
+    borderRadius: 18,
     padding: 14,
     borderWidth: 1,
     marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
   },
   contentRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
   },
-  checkbox: {
-    width: 24,
-    height: 24,
+  checkboxWrap: {
+    width: 26,
+    height: 26,
     borderRadius: 8,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
+  },
+  checkboxInner: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   textContainer: {
     flex: 1,
@@ -195,6 +250,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     lineHeight: 20,
+    letterSpacing: -0.2,
   },
   description: {
     fontSize: 13,
@@ -215,11 +271,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
   },
-  priorityDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
   badgeText: {
     fontSize: 11,
     fontWeight: '700',
@@ -227,15 +278,37 @@ const styles = StyleSheet.create({
   dueWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    marginLeft: 4,
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
   },
   dueText: {
     fontSize: 11,
     fontWeight: '600',
   },
-  deleteBtn: {
+  adminBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  adminBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#6366F1',
+  },
+  actionColumn: {
+    flexDirection: 'column',
+    gap: 6,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+  },
+  iconBtn: {
     padding: 4,
-    opacity: 0.7,
+    opacity: 0.8,
   },
 });
+

@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  ScrollView,
   RefreshControl,
   TouchableOpacity,
 } from 'react-native';
@@ -11,31 +12,34 @@ import { useRouter } from 'expo-router';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { format, startOfMonth, endOfMonth } from 'date-fns';
+import { safeFormat } from '../../../utils/dateUtils';
 import { attendanceApi } from '../../../api/attendance.api';
 import { useUIStore } from '../../../store/ui.store';
 import { Card } from '../../../components/ui/Card';
 import { Badge } from '../../../components/ui/Badge';
-import { Skeleton } from '../../../components/ui/Skeleton';
+import { SummarySkeleton } from '../../../components/ui/SkeletonPresets';
 import { ScreenHeader } from '../../../components/ui/ScreenHeader';
 import { MonthYearPicker } from '../../../components/ui/MonthYearPicker';
 import { CalendarGrid, DayData } from '../../../components/ui/CalendarGrid';
 import { colors } from '../../../constants/colors';
+import { ErrorBoundary } from '../../../components/ErrorBoundary';
 
 type ViewMode = 'calendar' | 'list';
 
-export default function AttendanceSummaryScreen() {
+function AttendanceSummaryContent() {
   const router = useRouter();
   const { theme, isDark } = useUIStore();
   const [selectedMonth, setSelectedMonth] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('calendar');
 
-  const from = format(startOfMonth(selectedMonth), 'yyyy-MM-dd');
-  const to = format(endOfMonth(selectedMonth), 'yyyy-MM-dd');
+  const from = safeFormat(startOfMonth(selectedMonth), 'yyyy-MM-dd', format(new Date(), 'yyyy-MM-01'));
+  const to = safeFormat(endOfMonth(selectedMonth), 'yyyy-MM-dd', format(new Date(), 'yyyy-MM-31'));
 
-  const { data, isLoading, refetch, isRefetching } = useQuery({
+  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ['my-attendance-summary', from, to],
     queryFn: () => attendanceApi.getMySummary({ from, to, limit: 31 }).then((res) => res.data.data),
     placeholderData: keepPreviousData,
+    staleTime: 60_000,
   });
 
   const records: DayData[] = data?.records || [];
@@ -51,29 +55,27 @@ export default function AttendanceSummaryScreen() {
   }, [records]);
 
   const handleDayPress = (day: DayData | null, date: Date) => {
+    const dStr = safeFormat(date, 'yyyy-MM-dd', format(new Date(), 'yyyy-MM-dd'));
     router.push({
-      pathname: '/(tabs)/attendance/day-detail' as any,
+      pathname: '/(tabs)/attendance/day-detail',
       params: {
-        dateStr: format(date, 'yyyy-MM-dd'),
-        dayData: JSON.stringify(day || { date: date.toISOString(), dateStr: format(date, 'yyyy-MM-dd'), dayStatus: 'A', isWeekOff: false, isHoliday: false }),
+        dateStr: dStr,
+        dayStatus: day?.dayStatus || 'A',
+        inTime: day?.record?.inTime || '',
+        outTime: day?.record?.outTime || '',
+        totalHours: day?.record?.totalHours ? String(day.record.totalHours) : '',
+        workMode: day?.record?.workMode || 'Office',
+        isLate: day?.record?.isLate ? '1' : '0',
+        lateMinutes: day?.record?.lateMinutes ? String(day.record.lateMinutes) : '0',
+        isHoliday: day?.isHoliday ? '1' : '0',
+        holidayName: day?.holidayName || '',
+        isWeekOff: day?.isWeekOff ? '1' : '0',
+        todayWork: day?.record?.todayWork || '',
+        pendingWork: day?.record?.pendingWork || '',
+        issuesFaced: day?.record?.issuesFaced || '',
       },
     });
   };
-
-  const renderSkeleton = () => (
-    <View style={styles.skeletonContent}>
-      <Skeleton width="100%" height={52} borderRadius={16} style={{ marginHorizontal: 20 }} />
-      <View style={styles.skeletonKpiRow}>
-        {[1, 2, 3, 4].map((i) => (
-          <View key={i} style={[styles.kpiCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <Skeleton width={36} height={26} borderRadius={6} />
-            <Skeleton width={44} height={12} borderRadius={4} style={{ marginTop: 6 }} />
-          </View>
-        ))}
-      </View>
-      <Skeleton width="100%" height={280} borderRadius={16} style={{ marginHorizontal: 20 }} />
-    </View>
-  );
 
   const renderListItem = ({ item }: { item: DayData }) => {
     const s = item.dayStatus;
@@ -96,12 +98,12 @@ export default function AttendanceSummaryScreen() {
           <View style={styles.logHeader}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.dateText, { color: theme.text }]}>
-                {format(new Date(item.date), 'EEEE, dd MMM')}
+                {safeFormat(item.date, 'EEEE, dd MMM')}
               </Text>
               {item.record?.inTime ? (
                 <Text style={[styles.timeText, { color: theme.textSecondary }]}>
-                  {format(new Date(item.record.inTime), 'hh:mm a')}
-                  {item.record.outTime ? ` – ${format(new Date(item.record.outTime), 'hh:mm a')}` : ' (No checkout)'}
+                  {safeFormat(item.record.inTime, 'hh:mm a')}
+                  {item.record.outTime ? ` – ${safeFormat(item.record.outTime, 'hh:mm a')}` : ' (No checkout)'}
                   {item.record.totalHours ? ` · ${item.record.totalHours.toFixed(1)}h` : ''}
                 </Text>
               ) : (item.isHoliday || item.isWeekOff) ? null : (
@@ -118,10 +120,19 @@ export default function AttendanceSummaryScreen() {
     );
   };
 
+  const { data: correctionsData } = useQuery({
+    queryKey: ['my-corrections'],
+    queryFn: () => attendanceApi.getMyCorrectionHistory().then((res) => res.data.data || []),
+    staleTime: 60_000,
+  });
+
   const kpiItems = [
     { value: summary?.present ?? 0, label: 'Present', color: '#15803D' },
-    { value: summary?.late ?? 0, label: 'Late', color: '#D97706' },
     { value: summary?.absent ?? 0, label: 'Absent', color: '#DC2626' },
+    { value: summary?.late ?? 0, label: 'Late', color: '#D97706' },
+    { value: summary?.halfDay ?? 0, label: 'Half Day', color: '#7C3AED' },
+    { value: summary?.weekOff ?? 0, label: 'Week Off', color: '#0369A1' },
+    { value: summary?.holiday ?? 0, label: 'Holiday', color: '#DB2777' },
     { value: (summary?.totalHours ?? 0).toFixed(0), label: 'Hours', color: colors.primary },
   ];
 
@@ -143,21 +154,32 @@ export default function AttendanceSummaryScreen() {
           />
         }
         ListHeaderComponent={
-          isLoading ? renderSkeleton() : (
+          isLoading ? <SummarySkeleton /> : isError ? (
+            <View style={styles.errorCardWrap}>
+              <Card style={styles.errorCard}>
+                <Ionicons name="alert-circle-outline" size={36} color={colors.error} />
+                <Text style={[styles.errorTitle, { color: theme.text }]}>Failed to Load Summary</Text>
+                <Text style={[styles.errorSub, { color: theme.textSecondary }]}>Network or server issue. Tap to try again.</Text>
+                <TouchableOpacity style={[styles.retryBtn, { backgroundColor: colors.primary }]} onPress={() => refetch()}>
+                  <Text style={styles.retryBtnText}>Retry</Text>
+                </TouchableOpacity>
+              </Card>
+            </View>
+          ) : (
             <>
               {/* Month Picker */}
               <MonthYearPicker selectedDate={selectedMonth} onChange={setSelectedMonth} />
 
               {/* KPI Bar */}
               {summary && (
-                <View style={styles.kpiRow}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kpiRowHorizontal}>
                   {kpiItems.map((k) => (
-                    <View key={k.label} style={[styles.kpiCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                    <View key={k.label} style={[styles.kpiCardItem, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                       <Text style={[styles.kpiVal, { color: k.color }]}>{k.value}</Text>
                       <Text style={[styles.kpiLbl, { color: theme.textTertiary }]}>{k.label}</Text>
                     </View>
                   ))}
-                </View>
+                </ScrollView>
               )}
 
               {/* View Mode Toggle */}
@@ -191,7 +213,7 @@ export default function AttendanceSummaryScreen() {
 
               {/* Correction Request Banner */}
               <TouchableOpacity
-                onPress={() => router.push('/(tabs)/attendance/correction' as any)}
+                onPress={() => router.push('/(tabs)/attendance/correction')}
                 style={[styles.correctionBanner, { backgroundColor: 'rgba(245,158,11,0.08)', borderColor: 'rgba(245,158,11,0.3)' }]}
               >
                 <Ionicons name="create-outline" size={18} color={colors.warning} />
@@ -201,6 +223,37 @@ export default function AttendanceSummaryScreen() {
                 </View>
                 <Ionicons name="chevron-forward" size={16} color={colors.warning} />
               </TouchableOpacity>
+
+              {/* Correction Status History Section */}
+              {correctionsData && correctionsData.length > 0 && (
+                <View style={{ marginHorizontal: 20, marginTop: 16, gap: 8 }}>
+                  <Text style={[styles.listHeading, { marginHorizontal: 0, marginTop: 0 }]}>Correction Requests Status</Text>
+                  {correctionsData.slice(0, 3).map((corr: any) => {
+                    const st = corr.correctionStatus;
+                    const isAppr = st === 'Approved';
+                    const isRej = st === 'Rejected';
+                    const badgeBg = isAppr ? 'rgba(16,185,129,0.1)' : isRej ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+                    const badgeColor = isAppr ? colors.success : isRej ? colors.error : colors.warning;
+                    return (
+                      <View key={corr._id} style={[styles.corrHistoryCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.corrHistDate, { color: theme.text }]}>
+                            {corr.date ? safeFormat(corr.date, 'dd MMM yyyy') : 'Request'}
+                          </Text>
+                          <Text style={[styles.corrHistReason, { color: theme.textSecondary }]} numberOfLines={1}>
+                            {corr.correctionReason}
+                          </Text>
+                        </View>
+                        <View style={[styles.corrStatusPill, { backgroundColor: badgeBg }]}>
+                          <Text style={[styles.corrStatusText, { color: badgeColor }]}>
+                            {isAppr ? 'Approved' : isRej ? 'Rejected' : 'Pending HR'}
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              )}
 
               {/* List header if list mode */}
               {viewMode === 'list' && (
@@ -212,10 +265,10 @@ export default function AttendanceSummaryScreen() {
           )
         }
         ListEmptyComponent={
-          viewMode === 'list' && !isLoading ? (
+          viewMode === 'list' && !isLoading && !isError ? (
             <View style={styles.empty}>
               <Text style={{ color: theme.textSecondary, fontWeight: '600' }}>
-                No records found for {format(selectedMonth, 'MMMM yyyy')}
+                No records found for {safeFormat(selectedMonth, 'MMMM yyyy')}
               </Text>
             </View>
           ) : null
@@ -225,14 +278,23 @@ export default function AttendanceSummaryScreen() {
   );
 }
 
+export default function AttendanceSummaryScreen() {
+  return (
+    <ErrorBoundary>
+      <AttendanceSummaryContent />
+    </ErrorBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1 },
   listContent: { paddingBottom: 40, gap: 0 },
   skeletonContent: { gap: 16, paddingTop: 16 },
   skeletonKpiRow: { flexDirection: 'row', gap: 10, paddingHorizontal: 20 },
-  kpiRow: { flexDirection: 'row', paddingHorizontal: 20, gap: 10, marginTop: 16 },
+  kpiRowHorizontal: { paddingHorizontal: 20, gap: 10, marginTop: 16 },
   kpiCard: { flex: 1, borderRadius: 16, borderWidth: 1, padding: 14, alignItems: 'center', gap: 4 },
-  kpiVal: { fontSize: 22, fontWeight: '900' },
+  kpiCardItem: { width: 90, borderRadius: 16, borderWidth: 1, padding: 12, alignItems: 'center', gap: 4 },
+  kpiVal: { fontSize: 20, fontWeight: '900' },
   kpiLbl: { fontSize: 11, fontWeight: '700' },
   viewToggle: { flexDirection: 'row', marginHorizontal: 20, marginTop: 16, borderRadius: 14, padding: 4, gap: 4 },
   toggleBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8, borderRadius: 10 },
@@ -241,6 +303,11 @@ const styles = StyleSheet.create({
   correctionBanner: { flexDirection: 'row', alignItems: 'center', gap: 12, marginHorizontal: 20, marginTop: 16, padding: 14, borderRadius: 16, borderWidth: 1 },
   correctionTitle: { fontSize: 13, fontWeight: '800' },
   correctionSub: { fontSize: 12, marginTop: 1 },
+  corrHistoryCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, borderWidth: 1 },
+  corrHistDate: { fontSize: 13, fontWeight: '700' },
+  corrHistReason: { fontSize: 11, marginTop: 2 },
+  corrStatusPill: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
+  corrStatusText: { fontSize: 11, fontWeight: '800' },
   listHeading: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.8, marginHorizontal: 20, marginTop: 16, marginBottom: 8 },
   logCard: { marginHorizontal: 20, marginBottom: 8, padding: 14 },
   logHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
@@ -248,4 +315,10 @@ const styles = StyleSheet.create({
   timeText: { fontSize: 12, marginTop: 3, fontWeight: '500' },
   logRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   empty: { padding: 40, alignItems: 'center' },
+  errorCardWrap: { paddingHorizontal: 20, marginTop: 20 },
+  errorCard: { padding: 24, alignItems: 'center', gap: 8 },
+  errorTitle: { fontSize: 16, fontWeight: '800' },
+  errorSub: { fontSize: 13, textAlign: 'center' },
+  retryBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10, marginTop: 8 },
+  retryBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
 });

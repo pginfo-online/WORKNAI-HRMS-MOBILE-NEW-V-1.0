@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { taskApi, TaskItem, TaskStatus, TaskReviewStatus, CreateTaskPayload, UpdateTaskPayload, MyTasksParams } from '../api/task.api';
 
-interface TaskSummary {
+export interface TaskSummary {
   total: number;
   completed: number;
   inProgress: number;
@@ -9,7 +9,7 @@ interface TaskSummary {
   completionPercentage: number;
 }
 
-interface Pagination {
+export interface Pagination {
   page: number;
   limit: number;
   total: number;
@@ -35,7 +35,7 @@ interface TaskState {
   isAdminLoading: boolean;
 
   // Actions
-  fetchTodayTasks: () => Promise<void>;
+  fetchTodayTasks: (silent?: boolean) => Promise<void>;
   createTask: (payload: CreateTaskPayload) => Promise<TaskItem | null>;
   toggleTaskCompletion: (task: TaskItem) => Promise<void>;
   updateTaskStatus: (taskId: string, status: TaskStatus) => Promise<void>;
@@ -44,13 +44,22 @@ interface TaskState {
   setTasks: (tasks: TaskItem[]) => void;
 
   // History
-  fetchMyTasks: (params?: MyTasksParams) => Promise<void>;
+  fetchMyTasks: (params?: MyTasksParams, silent?: boolean) => Promise<void>;
   fetchMoreHistory: (params?: MyTasksParams) => Promise<void>;
 
   // Admin
   fetchAdminTasks: (params?: any) => Promise<void>;
   reviewTask: (taskId: string, data: { reviewNotes?: string; reviewStatus?: TaskReviewStatus }) => Promise<void>;
 }
+
+const calculateSummary = (tasks: TaskItem[]): TaskSummary => {
+  const total = tasks.length;
+  const completed = tasks.filter((t) => t.status === 'Completed').length;
+  const inProgress = tasks.filter((t) => t.status === 'In Progress').length;
+  const pending = tasks.filter((t) => t.status === 'Pending' || t.status === 'Assigned').length;
+  const completionPercentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+  return { total, completed, inProgress, pending, completionPercentage };
+};
 
 export const useTaskStore = create<TaskState>((set, get) => ({
   tasks: [],
@@ -67,14 +76,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   adminPagination: null,
   isAdminLoading: false,
 
-  setTasks: (tasks) => set({ tasks }),
+  setTasks: (tasks) => set({ tasks, sessionSummary: calculateSummary(tasks) }),
 
-  fetchTodayTasks: async () => {
-    set({ isLoading: true, error: null });
+  fetchTodayTasks: async (silent = false) => {
+    if (!silent && get().tasks.length === 0) {
+      set({ isLoading: true, error: null });
+    }
     try {
       const res = await taskApi.getTodaySessionTasks();
       const { tasks, summary } = res.data.data;
-      set({ tasks: tasks || [], sessionSummary: summary || null, isLoading: false });
+      const loadedTasks = tasks || [];
+      set({
+        tasks: loadedTasks,
+        sessionSummary: summary || calculateSummary(loadedTasks),
+        isLoading: false,
+      });
     } catch (err: any) {
       set({
         error: err.response?.data?.message || 'Failed to load session tasks',
@@ -88,10 +104,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     try {
       const res = await taskApi.createTask(payload);
       const newTask = res.data.data;
-      set((state) => ({
-        tasks: [newTask, ...state.tasks],
+      const updatedTasks = [newTask, ...get().tasks];
+      const updatedHistory = [newTask, ...get().historyTasks];
+
+      set({
+        tasks: updatedTasks,
+        historyTasks: updatedHistory,
+        sessionSummary: calculateSummary(updatedTasks),
         isSaving: false,
-      }));
+      });
       return newTask;
     } catch (err: any) {
       set({ isSaving: false, error: err.response?.data?.message || 'Failed to create task' });
@@ -102,48 +123,92 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   toggleTaskCompletion: async (task) => {
     const currentStatus = task.status;
     const nextStatus: TaskStatus = currentStatus === 'Completed' ? 'In Progress' : 'Completed';
+    const nowIso = new Date().toISOString();
 
-    // Optimistic update
     const previousTasks = get().tasks;
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t._id === task._id
-          ? {
-              ...t,
-              status: nextStatus,
-              completedAt: nextStatus === 'Completed' ? new Date().toISOString() : undefined,
-            }
-          : t
-      ),
-    }));
+    const previousHistory = get().historyTasks;
+    const previousSummary = get().sessionSummary;
+
+    // Optimistic update across all task lists
+    const updatedTasks = previousTasks.map((t) =>
+      t._id === task._id
+        ? {
+            ...t,
+            status: nextStatus,
+            completedAt: nextStatus === 'Completed' ? nowIso : undefined,
+          }
+        : t
+    );
+
+    const updatedHistory = previousHistory.map((t) =>
+      t._id === task._id
+        ? {
+            ...t,
+            status: nextStatus,
+            completedAt: nextStatus === 'Completed' ? nowIso : undefined,
+          }
+        : t
+    );
+
+    set({
+      tasks: updatedTasks,
+      historyTasks: updatedHistory,
+      sessionSummary: calculateSummary(updatedTasks),
+    });
 
     try {
       await taskApi.updateTask(task._id, { status: nextStatus });
     } catch (err) {
       // Rollback on error
-      set({ tasks: previousTasks });
+      set({
+        tasks: previousTasks,
+        historyTasks: previousHistory,
+        sessionSummary: previousSummary,
+      });
       throw err;
     }
   },
 
   updateTaskStatus: async (taskId, status) => {
+    const nowIso = new Date().toISOString();
     const previousTasks = get().tasks;
-    set((state) => ({
-      tasks: state.tasks.map((t) =>
-        t._id === taskId
-          ? {
-              ...t,
-              status,
-              completedAt: status === 'Completed' ? new Date().toISOString() : undefined,
-            }
-          : t
-      ),
-    }));
+    const previousHistory = get().historyTasks;
+    const previousSummary = get().sessionSummary;
+
+    const updatedTasks = previousTasks.map((t) =>
+      t._id === taskId
+        ? {
+            ...t,
+            status,
+            completedAt: status === 'Completed' ? nowIso : undefined,
+          }
+        : t
+    );
+
+    const updatedHistory = previousHistory.map((t) =>
+      t._id === taskId
+        ? {
+            ...t,
+            status,
+            completedAt: status === 'Completed' ? nowIso : undefined,
+          }
+        : t
+    );
+
+    set({
+      tasks: updatedTasks,
+      historyTasks: updatedHistory,
+      sessionSummary: calculateSummary(updatedTasks),
+    });
 
     try {
       await taskApi.updateTask(taskId, { status });
     } catch (err) {
-      set({ tasks: previousTasks });
+      set({
+        tasks: previousTasks,
+        historyTasks: previousHistory,
+        sessionSummary: previousSummary,
+      });
       throw err;
     }
   },
@@ -153,11 +218,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     try {
       const res = await taskApi.updateTask(taskId, payload);
       const updated = res.data.data;
-      set((state) => ({
-        tasks: state.tasks.map((t) => (t._id === taskId ? updated : t)),
-        historyTasks: state.historyTasks.map((t) => (t._id === taskId ? updated : t)),
+      const updatedTasks = get().tasks.map((t) => (t._id === taskId ? updated : t));
+      const updatedHistory = get().historyTasks.map((t) => (t._id === taskId ? updated : t));
+
+      set({
+        tasks: updatedTasks,
+        historyTasks: updatedHistory,
+        sessionSummary: calculateSummary(updatedTasks),
         isSaving: false,
-      }));
+      });
     } catch (err) {
       set({ isSaving: false });
       throw err;
@@ -166,20 +235,34 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   deleteTask: async (taskId) => {
     const previousTasks = get().tasks;
-    set((state) => ({
-      tasks: state.tasks.filter((t) => t._id !== taskId),
-    }));
+    const previousHistory = get().historyTasks;
+    const previousSummary = get().sessionSummary;
+
+    const updatedTasks = previousTasks.filter((t) => t._id !== taskId);
+    const updatedHistory = previousHistory.filter((t) => t._id !== taskId);
+
+    set({
+      tasks: updatedTasks,
+      historyTasks: updatedHistory,
+      sessionSummary: calculateSummary(updatedTasks),
+    });
 
     try {
       await taskApi.deleteTask(taskId);
     } catch (err) {
-      set({ tasks: previousTasks });
+      set({
+        tasks: previousTasks,
+        historyTasks: previousHistory,
+        sessionSummary: previousSummary,
+      });
       throw err;
     }
   },
 
-  fetchMyTasks: async (params) => {
-    set({ isHistoryLoading: true });
+  fetchMyTasks: async (params, silent = false) => {
+    if (!silent && get().historyTasks.length === 0) {
+      set({ isHistoryLoading: true, error: null });
+    }
     try {
       const res = await taskApi.getMyTasks(params);
       const { tasks, pagination } = res.data.data;
@@ -189,7 +272,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         isHistoryLoading: false,
       });
     } catch (err: any) {
-      set({ isHistoryLoading: false });
+      const msg = err.response?.data?.message || 'Failed to retrieve tasks history';
+      set({ isHistoryLoading: false, error: msg });
     }
   },
 
@@ -206,12 +290,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         historyPagination: pagination || null,
       });
     } catch (err: any) {
-      // Silent fail for pagination
+      console.error('[TaskStore] fetchMoreHistory error:', err.message);
     }
   },
 
   fetchAdminTasks: async (params) => {
-    set({ isAdminLoading: true });
+    set({ isAdminLoading: true, error: null });
     try {
       const res = await taskApi.getAdminTasks(params);
       const { tasks, pagination } = res.data.data;
@@ -221,7 +305,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         isAdminLoading: false,
       });
     } catch (err: any) {
-      set({ isAdminLoading: false });
+      const msg = err.response?.data?.message || 'Failed to load admin task list';
+      set({ isAdminLoading: false, error: msg });
     }
   },
 
@@ -237,3 +322,4 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 }));
+

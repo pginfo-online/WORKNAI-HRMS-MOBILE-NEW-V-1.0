@@ -58,31 +58,37 @@ export const Button: React.FC<ButtonProps> = ({
   };
 
   const getTextStyle = (): TextStyle => {
+    const textBase = size === 'sm' ? styles.textSm : size === 'lg' ? styles.textLg : styles.textMd;
     switch (variant) {
       case 'outline':
-        return { ...styles.text, color: colors.primary, ...textStyle };
+        return { ...textBase, color: colors.primary, ...textStyle };
       case 'secondary':
-        return { ...styles.text, color: colors.light.text, ...textStyle };
+        return { ...textBase, color: colors.light.text, ...textStyle };
       default:
-        return { ...styles.text, color: '#FFFFFF', ...textStyle };
+        return { ...textBase, color: '#FFFFFF', ...textStyle };
     }
   };
 
   if (variant === 'gradient' && !disabled) {
     return (
-      <TouchableOpacity activeOpacity={0.8} onPress={handlePress} disabled={disabled || loading} style={style}>
+      <TouchableOpacity
+        activeOpacity={0.8}
+        onPress={handlePress}
+        disabled={disabled || loading}
+        style={style}
+      >
         <LinearGradient
           colors={colors.gradients.primary}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
-          style={[styles.base, styles[size], style]}
+          style={[styles.base, styles[size]]}
         >
           {loading ? (
             <ActivityIndicator color="#FFFFFF" size="small" />
           ) : (
             <>
               {icon}
-              <Text style={styles.text}>{title}</Text>
+              <Text style={getTextStyle()}>{title}</Text>
             </>
           )}
         </LinearGradient>
@@ -111,26 +117,42 @@ export const Button: React.FC<ButtonProps> = ({
 
 const styles = StyleSheet.create({
   base: {
-    borderRadius: 14,
+    borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
   },
   sm: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    minHeight: 38,
   },
   md: {
-    paddingVertical: 14,
+    paddingVertical: 12,
     paddingHorizontal: 20,
+    borderRadius: 12,
+    minHeight: 46,
   },
   lg: {
-    paddingVertical: 18,
+    paddingVertical: 16,
     paddingHorizontal: 24,
+    borderRadius: 14,
+    minHeight: 52,
   },
-  text: {
-    fontSize: 15,
+  textSm: {
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: -0.1,
+  },
+  textMd: {
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+  },
+  textLg: {
+    fontSize: 16,
     fontWeight: '700',
     letterSpacing: -0.2,
   },

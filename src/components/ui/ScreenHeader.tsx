@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Platform, StatusBar, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,18 +9,43 @@ interface ScreenHeaderProps {
   title: string;
   subtitle?: string;
   showBack?: boolean;
+  showLogo?: boolean;
+  leftAction?: React.ReactNode;
   rightAction?: React.ReactNode;
+  onBackPress?: () => void;
 }
 
 export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
   title,
   subtitle,
   showBack = false,
+  showLogo = false,
+  leftAction,
   rightAction,
+  onBackPress,
 }) => {
   const router = useRouter();
   const { theme } = useUIStore();
   const insets = useSafeAreaInsets();
+  const isBackInProgressRef = React.useRef(false);
+
+  const handleBack = () => {
+    if (isBackInProgressRef.current) return;
+    isBackInProgressRef.current = true;
+    setTimeout(() => {
+      isBackInProgressRef.current = false;
+    }, 450);
+
+    if (onBackPress) {
+      onBackPress();
+      return;
+    }
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/attendance' as any);
+    }
+  };
 
   return (
     <View
@@ -36,19 +61,33 @@ export const ScreenHeader: React.FC<ScreenHeaderProps> = ({
       <View style={styles.leftRow}>
         {showBack && (
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={handleBack}
             style={[styles.backBtn, { backgroundColor: theme.surfaceAlt }]}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="chevron-back" size={20} color={theme.text} />
           </TouchableOpacity>
         )}
-        <View>
-          <Text style={[styles.title, { color: theme.text }]}>{title}</Text>
-          {subtitle ? <Text style={[styles.subtitle, { color: theme.textSecondary }]}>{subtitle}</Text> : null}
+
+        {showLogo && (
+          <View style={[styles.logoBadge, { backgroundColor: theme.surfaceAlt, borderColor: theme.border }]}>
+            <Image
+              source={require('../../../assets/images/logo.png')}
+              style={styles.logoImg}
+              resizeMode="contain"
+            />
+          </View>
+        )}
+
+        {leftAction}
+
+        <View style={{ flexShrink: 1 }}>
+          <Text style={[styles.title, { color: theme.text }]} numberOfLines={1}>{title}</Text>
+          {subtitle ? <Text style={[styles.subtitle, { color: theme.textSecondary }]} numberOfLines={1}>{subtitle}</Text> : null}
         </View>
       </View>
-      {rightAction && <View>{rightAction}</View>}
+
+      {rightAction && <View style={styles.rightWrap}>{rightAction}</View>}
     </View>
   );
 };
@@ -66,6 +105,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
+    flex: 1,
+  },
+  logoBadge: {
+    width: 40,
+    height: 40,
+    aspectRatio: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 3,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  logoImg: {
+    width: '100%',
+    height: '100%',
+    aspectRatio: 1,
   },
   backBtn: {
     width: 38,
@@ -74,14 +130,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  rightWrap: {
+    marginLeft: 10,
+  },
   title: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: '800',
     letterSpacing: -0.4,
   },
   subtitle: {
-    fontSize: 13,
+    fontSize: 12,
     marginTop: 2,
-    fontWeight: '500',
+    fontWeight: '600',
   },
 });

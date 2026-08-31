@@ -32,7 +32,6 @@ export default function LeaveDashboardScreen() {
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScreenHeader
         title="Leave Portal"
-        subtitle="Balances & Requests"
         rightAction={
           <TouchableOpacity
             onPress={() => router.push('/(tabs)/leaves/history' as any)}

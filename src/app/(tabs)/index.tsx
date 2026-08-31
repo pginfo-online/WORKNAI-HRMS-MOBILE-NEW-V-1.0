@@ -24,6 +24,7 @@ import { colors } from '../../constants/colors';
 import { Card } from '../../components/ui/Card';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { ProgressRing } from '../../components/ui/ProgressRing';
+import { ScreenHeader } from '../../components/ui/ScreenHeader';
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -114,6 +115,37 @@ export default function HomeScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
+      {/* Existing Header Component with Brand Logo on Far Left */}
+      <ScreenHeader
+        title="WorknAI HRMS"
+        subtitle={format(new Date(), 'EEEE, dd MMMM yyyy')}
+        showLogo={true}
+        rightAction={
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <TouchableOpacity
+              onPress={() => setGuideVisible(true)}
+              style={[styles.topIconBtn, { backgroundColor: theme.surfaceAlt }]}
+            >
+              <Ionicons name="help-circle-outline" size={20} color={theme.text} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => router.push('/(tabs)/profile')}
+              style={styles.avatarWrap}
+            >
+              {user?.profileImageUrl ? (
+                <Image source={{ uri: user.profileImageUrl }} style={styles.avatarImg} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarText}>
+                    {user?.name?.substring(0, 2).toUpperCase() || 'WA'}
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        }
+      />
+
       <ScrollView
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
@@ -125,7 +157,7 @@ export default function HomeScreen() {
           />
         }
       >
-        {/* Header Hero Banner */}
+        {/* Hero Banner */}
         <LinearGradient
           colors={colors.gradients.primary}
           start={{ x: 0, y: 0 }}
@@ -133,33 +165,13 @@ export default function HomeScreen() {
           style={styles.heroBanner}
         >
           <View style={styles.headerTop}>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={styles.dateSub}>{format(new Date(), 'EEEE, dd MMMM yyyy')}</Text>
+            <View style={{ flex: 1, gap: 2 }}>
               <Text style={styles.greetingText}>
                 Hello, {user?.name?.split(' ')[0] || 'Employee'} 👋
               </Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TouchableOpacity
-                onPress={() => setGuideVisible(true)}
-                style={styles.tourIconBtn}
-              >
-                <Ionicons name="help-circle-outline" size={22} color="#FFFFFF" />
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => router.push('/(tabs)/profile')}
-                style={styles.avatarWrap}
-              >
-                {user?.profileImageUrl ? (
-                  <Image source={{ uri: user.profileImageUrl }} style={styles.avatarImg} />
-                ) : (
-                  <View style={styles.avatarFallback}>
-                    <Text style={styles.avatarText}>
-                      {user?.name?.substring(0, 2).toUpperCase() || 'WA'}
-                    </Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+              <Text style={styles.heroSubText}>
+                Welcome to your daily employee portal & workspace dashboard.
+              </Text>
             </View>
           </View>
 
@@ -504,7 +516,23 @@ const styles = StyleSheet.create({
   content: { padding: 20, gap: 16, paddingBottom: 40 },
   heroBanner: { borderRadius: 24, padding: 22, gap: 16 },
   headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
-  dateSub: { color: 'rgba(255,255,255,0.8)', fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  headerLogoWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    padding: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  headerLogoImg: { width: '100%', height: '100%' },
+  topIconBtn: { width: 38, height: 38, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  heroSubText: { color: 'rgba(255,255,255,0.85)', fontSize: 13, fontWeight: '500', marginTop: 2 },
   greetingText: { color: '#FFFFFF', fontSize: 22, fontWeight: '900', letterSpacing: -0.5 },
   tourIconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
   avatarWrap: { width: 44, height: 44, borderRadius: 22, overflow: 'hidden', borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)' },

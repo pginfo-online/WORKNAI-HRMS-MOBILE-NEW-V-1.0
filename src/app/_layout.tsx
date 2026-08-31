@@ -5,8 +5,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Toast from 'react-native-toast-message';
 import { useAuthStore } from '../store/auth.store';
 import { useUIStore } from '../store/ui.store';
-import { View, ActivityIndicator } from 'react-native';
-import { colors } from '../constants/colors';
+import { UpdateManager } from '../components/UpdateManager';
+import { ErrorBoundary } from '../components/ErrorBoundary';
+
+import * as SplashScreen from 'expo-splash-screen';
+
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -25,36 +29,41 @@ function RootLayoutNav() {
   const { loadTheme, isDark } = useUIStore();
 
   useEffect(() => {
-    loadAuthFromStorage();
-    loadTheme();
+    async function init() {
+      try {
+        await Promise.all([loadAuthFromStorage(), loadTheme()]);
+      } catch (_) {
+      } finally {
+        await SplashScreen.hideAsync().catch(() => {});
+      }
+    }
+    init();
   }, []);
 
   useEffect(() => {
     if (isLoading) return;
 
-    const inAuthGroup = segments[0] === '(auth)' as any;
+    const inAuthGroup = segments[0] === '(auth)';
+    const inTabsGroup = segments[0] === '(tabs)';
 
     if (!isAuthenticated && !inAuthGroup) {
-      // Redirect to login
-      router.replace('/(auth)/login' as any);
-    } else if (isAuthenticated && inAuthGroup) {
-      // Redirect to main tabs
-      router.replace('/(tabs)' as any);
+      // Redirect to login if unauthenticated and not in auth group
+      router.replace('/(auth)/login');
+    } else if (isAuthenticated && !inTabsGroup) {
+      // Redirect to main tabs if authenticated and not in tabs group
+      router.replace('/(tabs)');
     }
   }, [isAuthenticated, isLoading, segments]);
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: isDark ? '#0B1120' : '#F8FAFC', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
+    return null;
   }
 
   return (
     <>
       <StatusBar style={isDark ? 'light' : 'dark'} />
       <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="index" options={{ headerShown: false }} />
         <Stack.Screen name="(auth)" options={{ headerShown: false }} />
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       </Stack>
@@ -65,8 +74,12 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <RootLayoutNav />
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <UpdateManager>
+          <RootLayoutNav />
+        </UpdateManager>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

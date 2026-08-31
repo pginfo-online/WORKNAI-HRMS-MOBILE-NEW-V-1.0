@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,19 +14,22 @@ import {
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import Toast from 'react-native-toast-message';
 import { useQueryClient, useMutation } from '@tanstack/react-query';
 import { attendanceApi } from '../../../api/attendance.api';
 import { employeeApi } from '../../../api/employee.api';
 import { taskApi, TaskItem } from '../../../api/task.api';
 import { useTaskStore } from '../../../store/task.store';
 import { useUIStore } from '../../../store/ui.store';
+import { useAttendanceFeedback } from '../../../hooks/useAttendanceFeedback';
+import { getLocation } from '../../../services/locationService';
 import { colors } from '../../../constants/colors';
 import { ScreenHeader } from '../../../components/ui/ScreenHeader';
 import { Card } from '../../../components/ui/Card';
+import { AttendanceFeedback } from '../../../components/ui/AttendanceFeedback';
+import { ErrorBoundary } from '../../../components/ErrorBoundary';
 import NetInfo from '@react-native-community/netinfo';
 
-export default function CheckOutTasksScreen() {
+function CheckOutTasksContent() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     latitude?: string;
@@ -34,21 +37,24 @@ export default function CheckOutTasksScreen() {
   }>();
 
   const qc = useQueryClient();
-  const { theme } = useUIStore();
+  const { theme, isDark } = useUIStore();
   const { tasks: storeTasks, fetchTodayTasks } = useTaskStore();
+  const { feedbackState, showFeedback, hideFeedback } = useAttendanceFeedback();
 
-  const [sessionTasks, setSessionTasks] = useState<TaskItem[]>(storeTasks);
+  // Initialize once from store snapshot to avoid double-render
+  const [sessionTasks, setSessionTasks] = useState<TaskItem[]>(() => storeTasks);
   const [closingNotes, setClosingNotes] = useState('');
   const [issuesFaced, setIssuesFaced] = useState('');
   const [managementEmps, setManagementEmps] = useState<any[]>([]);
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
 
-  useEffect(() => {
-    setSessionTasks(storeTasks);
-  }, [storeTasks]);
+  // Double-tap & concurrency prevention
+  const isSubmittingRef = useRef(false);
 
+  // Load management list for reporting
   useEffect(() => {
-    employeeApi.getManagement()
+    employeeApi
+      .getManagement()
       .then((res) => setManagementEmps(res.data.data || []))
       .catch(() => {});
   }, []);
@@ -82,29 +88,42 @@ export default function CheckOutTasksScreen() {
   const checkOutMutation = useMutation({
     mutationFn: async () => {
       const state = await NetInfo.fetch();
-      if (!state.isConnected) {
-        throw new Error('OFFLINE');
-      }
+      if (!state.isConnected) throw new Error('OFFLINE');
 
-      // 1. Sync updated task states in bulk
-      await taskApi.syncCheckout(sessionTasks);
-
-      // 2. Prepare todayWork and pendingWork summaries
       const completedStr = completedTasks
         .map((t) => `• ${t.title}${t.description ? ` (${t.description})` : ''}`)
         .join('\n');
-
       const pendingStr = pendingTasks
         .map((t) => `• ${t.title}${t.dueTime ? ` [Due: ${t.dueTime}]` : ''}`)
         .join('\n');
-
-      const todayWork = [completedStr, closingNotes.trim()].filter(Boolean).join('\n\nNotes:\n') || 'Work completed for the shift.';
+      const todayWork =
+        [completedStr, closingNotes.trim()].filter(Boolean).join('\n\nNotes:\n') ||
+        'Work completed for the shift.';
       const pendingWork = pendingStr || 'No pending tasks';
 
-      const lat = params.latitude ? parseFloat(params.latitude) : undefined;
-      const lng = params.longitude ? parseFloat(params.longitude) : undefined;
+      let lat =
+        params.latitude && !isNaN(parseFloat(params.latitude))
+          ? parseFloat(params.latitude)
+          : undefined;
+      let lng =
+        params.longitude && !isNaN(parseFloat(params.longitude))
+          ? parseFloat(params.longitude)
+          : undefined;
 
-      const res = await attendanceApi.checkOut({
+      // Fast-path location check (cached position, 1.5s timeout)
+      if (lat == null || lng == null) {
+        try {
+          const locResult = await getLocation({ forceRefresh: false, timeout: 1500 });
+          if (locResult.type === 'success' && locResult.coords) {
+            lat = locResult.coords.latitude;
+            lng = locResult.coords.longitude;
+          }
+        } catch (_) {}
+      }
+
+      // Execute task sync and checkout in parallel with 30s timeout
+      const syncPromise = taskApi.syncCheckout(sessionTasks).catch(() => {});
+      const checkOutPromise = attendanceApi.checkOut({
         latitude: lat,
         longitude: lng,
         todayWork,
@@ -113,100 +132,119 @@ export default function CheckOutTasksScreen() {
         reportParticipants: selectedParticipants,
       });
 
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('TIMEOUT')), 30_000)
+      );
+
+      const [_, res] = (await Promise.race([
+        Promise.all([syncPromise, checkOutPromise]),
+        timeoutPromise,
+      ])) as any;
+
       return res;
     },
-    onSuccess: async (res) => {
+    onSuccess: () => {
+      isSubmittingRef.current = false;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      const totalHrs = res.data.data?.totalHours || 0;
-      Toast.show({
-        type: 'success',
-        text1: 'Checked Out Successfully ✓',
-        text2: `Logged ${totalHrs.toFixed(1)} hrs · Tasks updated`,
-      });
-
+      // Trigger background cache updates without blocking the UI navigation transition
       qc.invalidateQueries({ queryKey: ['today-status'] });
       qc.invalidateQueries({ queryKey: ['my-attendance-summary'] });
-      await fetchTodayTasks();
+      fetchTodayTasks().catch(() => {});
 
-      router.replace('/(tabs)/attendance');
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(tabs)/attendance');
+      }
     },
     onError: (err: any) => {
+      isSubmittingRef.current = false;
       if (err.message === 'OFFLINE') {
-        Toast.show({
-          type: 'error',
-          text1: 'No Connection',
-          text2: 'Cannot check out while offline. Please connect to internet.',
+        showFeedback({
+          message: 'No Internet Connection',
+          subMessage: 'Cannot check out while offline. Please connect to the internet.',
+          variant: 'error',
         });
         return;
       }
-      Toast.show({
-        type: 'error',
-        text1: 'Check-Out Failed',
-        text2: err.response?.data?.message || 'Failed to complete check-out',
+      if (err.message === 'TIMEOUT') {
+        showFeedback({
+          message: 'Request Timed Out',
+          subMessage: 'The server took too long to complete checkout. Please retry.',
+          variant: 'warning',
+        });
+        return;
+      }
+      showFeedback({
+        message: 'Check-Out Failed',
+        subMessage: err.response?.data?.message || 'Failed to complete check-out.',
+        variant: 'error',
       });
-    }
+    },
   });
 
-  const handleConfirmCheckout = () => {
+  const handleConfirmCheckout = useCallback(() => {
+    if (isSubmittingRef.current || checkOutMutation.isPending) return;
+
     if (pendingTasks.length > 0) {
       Alert.alert(
-        'Pending Tasks Remaining',
+        'Pending Deliverables Remaining',
         `You have ${pendingTasks.length} pending task(s). Are you sure you want to end your shift now?`,
         [
           { text: 'Review Tasks', style: 'cancel' },
           {
             text: 'Yes, End Shift',
             style: 'destructive',
-            onPress: () => checkOutMutation.mutate(),
+            onPress: () => {
+              isSubmittingRef.current = true;
+              checkOutMutation.mutate();
+            },
           },
         ]
       );
     } else {
+      isSubmittingRef.current = true;
       checkOutMutation.mutate();
     }
-  };
+  }, [pendingTasks.length, checkOutMutation]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <ScreenHeader
-        title="End Shift & Task Review"
-        subtitle="Review Deliverables & Closing Summary"
-        showBack
-      />
+      <ScreenHeader title="End Shift & Task Review" showBack />
 
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Summary Stat Banner */}
-          <View style={styles.statsBanner}>
+          {/* Stats Banner */}
+          <View style={[styles.statsBanner, { backgroundColor: isDark ? 'rgba(32,118,199,0.12)' : 'rgba(32,118,199,0.08)' }]}>
             <View style={styles.statItem}>
-              <Text style={styles.statNum}>{sessionTasks.length}</Text>
-              <Text style={styles.statLabel}>Total Tasks</Text>
+              <Text style={[styles.statNum, { color: colors.primary }]}>{sessionTasks.length}</Text>
+              <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Total Tasks</Text>
             </View>
-            <View style={styles.divider} />
+            <View style={[styles.divider, { backgroundColor: theme.border }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: colors.success }]}>
-                {completedTasks.length}
-              </Text>
-              <Text style={styles.statLabel}>Completed</Text>
+              <Text style={[styles.statNum, { color: colors.success }]}>{completedTasks.length}</Text>
+              <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Completed</Text>
             </View>
-            <View style={styles.divider} />
+            <View style={[styles.divider, { backgroundColor: theme.border }]} />
             <View style={styles.statItem}>
-              <Text style={[styles.statNum, { color: pendingTasks.length > 0 ? colors.warning : colors.primary }]}>
+              <Text
+                style={[
+                  styles.statNum,
+                  { color: pendingTasks.length > 0 ? colors.warning : colors.primary },
+                ]}
+              >
                 {pendingTasks.length}
               </Text>
-              <Text style={styles.statLabel}>Pending</Text>
+              <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Pending</Text>
             </View>
           </View>
 
-          {/* 1. Pending Tasks Section */}
+          {/* Pending Tasks */}
           {pendingTasks.length > 0 && (
             <View style={styles.sectionBlock}>
               <View style={styles.sectionHeaderRow}>
@@ -216,34 +254,34 @@ export default function CheckOutTasksScreen() {
                 </Text>
               </View>
               <Text style={[styles.sectionHint, { color: theme.textTertiary }]}>
-                Tap the checkbox if you completed any task before leaving
+                Tap the checkbox if you completed any deliverable before leaving
               </Text>
-
               <View style={styles.tasksList}>
                 {pendingTasks.map((t) => (
                   <TouchableOpacity
                     key={t._id}
                     activeOpacity={0.8}
                     onPress={() => toggleTaskStatus(t._id)}
-                    style={[
-                      styles.taskCard,
-                      { backgroundColor: theme.surface, borderColor: theme.border },
-                    ]}
+                    style={[styles.taskCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
                   >
-                    <View style={[styles.checkbox, { borderColor: theme.border }]}>
-                      {t.status === 'Completed' && (
-                        <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                      )}
+                    <View
+                      style={[
+                        styles.checkbox,
+                        {
+                          backgroundColor: t.status === 'Completed' ? colors.success : 'transparent',
+                          borderColor: t.status === 'Completed' ? colors.success : theme.border,
+                        },
+                      ]}
+                    >
+                      {t.status === 'Completed' && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.taskTitle, { color: theme.text }]}>{t.title}</Text>
                       {t.description ? (
-                        <Text style={[styles.taskDesc, { color: theme.textSecondary }]}>
-                          {t.description}
-                        </Text>
+                        <Text style={[styles.taskDesc, { color: theme.textSecondary }]}>{t.description}</Text>
                       ) : null}
                       <Text style={[styles.taskMeta, { color: theme.textTertiary }]}>
-                        {t.priority} Priority {t.dueTime ? `· Due ${t.dueTime}` : ''}
+                        {t.priority} Priority{t.dueTime ? ` · Due ${t.dueTime}` : ''}
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -252,7 +290,7 @@ export default function CheckOutTasksScreen() {
             </View>
           )}
 
-          {/* 2. Completed Tasks Section */}
+          {/* Completed Tasks */}
           {completedTasks.length > 0 && (
             <View style={styles.sectionBlock}>
               <View style={styles.sectionHeaderRow}>
@@ -261,7 +299,6 @@ export default function CheckOutTasksScreen() {
                   Completed Deliverables ({completedTasks.length})
                 </Text>
               </View>
-
               <View style={styles.tasksList}>
                 {completedTasks.map((t) => (
                   <TouchableOpacity
@@ -270,7 +307,10 @@ export default function CheckOutTasksScreen() {
                     onPress={() => toggleTaskStatus(t._id)}
                     style={[
                       styles.taskCard,
-                      { backgroundColor: theme.surface, borderColor: 'rgba(16,185,129,0.25)' },
+                      {
+                        backgroundColor: theme.surface,
+                        borderColor: isDark ? 'rgba(16,185,129,0.3)' : 'rgba(16,185,129,0.25)',
+                      },
                     ]}
                   >
                     <View style={[styles.checkbox, { backgroundColor: colors.success, borderColor: colors.success }]}>
@@ -280,14 +320,12 @@ export default function CheckOutTasksScreen() {
                       <Text
                         style={[
                           styles.taskTitle,
-                          { color: theme.textSecondary, textDecorationLine: 'line-through' },
+                          { color: theme.textTertiary, textDecorationLine: 'line-through' },
                         ]}
                       >
                         {t.title}
                       </Text>
-                      <Text style={[styles.taskMeta, { color: colors.success }]}>
-                        Completed ✓
-                      </Text>
+                      <Text style={[styles.taskMeta, { color: colors.success }]}>Completed ✓</Text>
                     </View>
                   </TouchableOpacity>
                 ))}
@@ -318,7 +356,7 @@ export default function CheckOutTasksScreen() {
                   styles.textArea,
                   { backgroundColor: theme.surfaceAlt, color: theme.text, borderColor: theme.border },
                 ]}
-                placeholder="Any links, PR numbers, meeting notes, or achievements..."
+                placeholder="Key links, PR numbers, meeting notes, or achievements..."
                 placeholderTextColor={theme.textTertiary}
                 value={closingNotes}
                 onChangeText={setClosingNotes}
@@ -345,7 +383,6 @@ export default function CheckOutTasksScreen() {
               />
             </View>
 
-            {/* Notify Managers */}
             {managementEmps.length > 0 && (
               <View style={styles.inputGroup}>
                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
@@ -382,180 +419,82 @@ export default function CheckOutTasksScreen() {
             <TouchableOpacity
               onPress={handleConfirmCheckout}
               disabled={checkOutMutation.isPending}
+              activeOpacity={0.85}
               style={[
                 styles.confirmBtn,
-                { backgroundColor: colors.error, opacity: checkOutMutation.isPending ? 0.6 : 1 },
+                { backgroundColor: colors.error, opacity: checkOutMutation.isPending ? 0.75 : 1 },
               ]}
             >
               {checkOutMutation.isPending ? (
-                <ActivityIndicator color="#FFFFFF" />
+                <ActivityIndicator color="#FFFFFF" size="small" />
               ) : (
                 <>
-                  <Ionicons name="log-out-outline" size={20} color="#FFFFFF" />
-                  <Text style={styles.confirmBtnText}>
-                    Confirm & Complete Check-Out
-                  </Text>
+                  <Ionicons name="log-out-outline" size={22} color="#FFFFFF" />
+                  <Text style={styles.confirmBtnText}>Confirm & Complete Check-Out</Text>
                 </>
               )}
             </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Inline Feedback */}
+      <AttendanceFeedback
+        visible={feedbackState.visible}
+        message={feedbackState.message}
+        subMessage={feedbackState.subMessage}
+        variant={feedbackState.variant}
+        onHide={hideFeedback}
+      />
     </View>
   );
 }
 
+export default function CheckOutTasksScreen() {
+  return (
+    <ErrorBoundary>
+      <CheckOutTasksContent />
+    </ErrorBoundary>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 20,
-    gap: 18,
-    paddingBottom: 50,
-  },
+  container: { flex: 1 },
+  scrollContent: { padding: 20, gap: 18, paddingBottom: 80 },
   statsBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    backgroundColor: 'rgba(32,118,199,0.08)',
     borderRadius: 18,
     paddingVertical: 14,
   },
-  statItem: {
-    alignItems: 'center',
-    gap: 2,
-  },
-  statNum: {
-    fontSize: 20,
-    fontWeight: '900',
-    color: colors.primary,
-  },
-  statLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-  },
-  divider: {
-    width: 1,
-    height: 26,
-    backgroundColor: 'rgba(0,0,0,0.08)',
-  },
-  sectionBlock: {
-    gap: 10,
-  },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  sectionHint: {
-    fontSize: 12,
-  },
-  tasksList: {
-    gap: 8,
-  },
-  taskCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    padding: 14,
-    borderRadius: 16,
-    borderWidth: 1,
-  },
-  checkbox: {
-    width: 24,
-    height: 24,
-    borderRadius: 8,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  taskTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  taskDesc: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  taskMeta: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  emptyCard: {
-    padding: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  emptyTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  emptySub: {
-    fontSize: 12,
-    textAlign: 'center',
-  },
-  formCard: {
-    padding: 18,
-    gap: 14,
-  },
-  cardHeading: {
-    fontSize: 15,
-    fontWeight: '800',
-  },
-  inputGroup: {
-    gap: 6,
-  },
-  inputLabel: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  textArea: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 12,
-    fontSize: 13,
-    minHeight: 60,
-    textAlignVertical: 'top',
-  },
-  tagGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  tagChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  tagText: {
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  bottomBar: {
-    marginTop: 4,
-  },
-  confirmBtn: {
-    flexDirection: 'row',
-    height: 52,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-  },
-  confirmBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '800',
-  },
+  statItem: { alignItems: 'center', gap: 2 },
+  statNum: { fontSize: 22, fontWeight: '900' },
+  statLabel: { fontSize: 11, fontWeight: '700' },
+  divider: { width: 1, height: 26 },
+  sectionBlock: { gap: 8 },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sectionTitle: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+  sectionHint: { fontSize: 12 },
+  tasksList: { gap: 8 },
+  taskCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1 },
+  checkbox: { width: 24, height: 24, borderRadius: 8, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  taskTitle: { fontSize: 14, fontWeight: '700' },
+  taskDesc: { fontSize: 12, marginTop: 2 },
+  taskMeta: { fontSize: 11, fontWeight: '600', marginTop: 4 },
+  emptyCard: { padding: 24, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  emptyTitle: { fontSize: 15, fontWeight: '800' },
+  emptySub: { fontSize: 12, textAlign: 'center' },
+  formCard: { padding: 18, gap: 14 },
+  cardHeading: { fontSize: 15, fontWeight: '800' },
+  inputGroup: { gap: 6 },
+  inputLabel: { fontSize: 12, fontWeight: '700' },
+  textArea: { borderRadius: 12, borderWidth: 1, padding: 12, fontSize: 13, minHeight: 60, textAlignVertical: 'top' },
+  tagGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  tagChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
+  tagText: { fontSize: 11, fontWeight: '600' },
+  bottomBar: { marginTop: 4 },
+  confirmBtn: { flexDirection: 'row', height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 10 },
+  confirmBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
 });
+

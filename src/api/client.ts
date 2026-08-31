@@ -1,6 +1,7 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 import { CONFIG } from '../constants/config';
+import { useAuthStore } from '../store/auth.store';
 
 const client = axios.create({
   baseURL: CONFIG.API_BASE_URL,
@@ -77,8 +78,9 @@ client.interceptors.response.use(
         return client(originalRequest);
       } catch (err) {
         processQueue(err, null);
-        await SecureStore.deleteItemAsync('accessToken');
-        await SecureStore.deleteItemAsync('refreshToken');
+        try {
+          await useAuthStore.getState().logout();
+        } catch (_) {}
         return Promise.reject(err);
       } finally {
         isRefreshing = false;

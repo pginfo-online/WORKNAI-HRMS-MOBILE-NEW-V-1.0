@@ -57,7 +57,7 @@ export default function LeaveHistoryScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <ScreenHeader title="Leave History" subtitle="Full log of your leave requests" showBack />
+      <ScreenHeader title="Leave History"/>
 
       <FlatList
         data={leaves}

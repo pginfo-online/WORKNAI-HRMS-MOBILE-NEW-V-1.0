@@ -43,8 +43,11 @@ export default function ApplyLeaveScreen() {
       });
       qc.invalidateQueries({ queryKey: ['my-leaves-recent'] });
       qc.invalidateQueries({ queryKey: ['my-leaves-history'] });
-      qc.invalidateQueries({ queryKey: ['my-leave-balance'] });
-      router.back();
+      if (router.canGoBack()) {
+        router.back();
+      } else {
+        router.replace('/(tabs)/leaves' as any);
+      }
     },
     onError: (err: any) => {
       Toast.show({

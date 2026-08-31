@@ -7,50 +7,65 @@ import {
   TouchableOpacity,
   RefreshControl,
   AppState,
+  AppStateStatus,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import * as Location from 'expo-location';
 import * as Haptics from 'expo-haptics';
-import Toast from 'react-native-toast-message';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { attendanceApi } from '../../../api/attendance.api';
 import { useAuthStore } from '../../../store/auth.store';
 import { useUIStore } from '../../../store/ui.store';
 import { useTaskStore } from '../../../store/task.store';
+import { useBiometricAuth } from '../../../hooks/useBiometricAuth';
+import { useLocationVerification } from '../../../hooks/useLocationVerification';
+import { useAttendanceFeedback } from '../../../hooks/useAttendanceFeedback';
+import { getLocation } from '../../../services/locationService';
 import { colors } from '../../../constants/colors';
 import { Card } from '../../../components/ui/Card';
 import { ScreenHeader } from '../../../components/ui/ScreenHeader';
 import { TaskItemCard } from '../../../components/tasks/TaskItemCard';
-import { Skeleton } from '../../../components/ui/Skeleton';
-import { calculateDistance } from '../../../utils/geoUtils';
-import { format } from 'date-fns';
+import { AttendanceMainSkeleton } from '../../../components/ui/SkeletonPresets';
+import { AttendanceFeedback } from '../../../components/ui/AttendanceFeedback';
+import { ErrorBoundary } from '../../../components/ErrorBoundary';
+import { safeFormat } from '../../../utils/dateUtils';
 
-export default function AttendanceScreen() {
+function AttendanceContent() {
   const router = useRouter();
   const qc = useQueryClient();
   const { user } = useAuthStore();
-  const { isDark, theme } = useUIStore();
+  const { theme } = useUIStore();
   const { tasks, isLoading: tasksLoading, fetchTodayTasks, toggleTaskCompletion, deleteTask } = useTaskStore();
+  const { authenticate: authenticateBiometrics } = useBiometricAuth();
 
+  // ── Location Verification ──────────────────────────────────────────────────
+  const {
+    geoStatus,
+    geoDistance,
+    userLocation,
+    verifyLocation,
+    resetGeoStatus,
+  } = useLocationVerification();
+
+  // ── Feedback bar ──────────────────────────────────────────────────────────
+  const { feedbackState, showFeedback, hideFeedback } = useAttendanceFeedback();
+
+  // ── Local State ───────────────────────────────────────────────────────────
   const [workMode, setWorkMode] = useState<'Office' | 'WFH' | 'Field'>('Office');
   const [actionLoading, setActionLoading] = useState(false);
-
-  // Geo validation state
-  const [geoStatus, setGeoStatus] = useState<'checking' | 'valid' | 'invalid' | 'error' | 'permission_denied'>('checking');
-  const [geoDistance, setGeoDistance] = useState<number>(0);
-  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
-  const isVerifyingGeoRef = useRef(false);
 
   // Live Timer & Shift metrics
   const [timerDisplay, setTimerDisplay] = useState('00:00:00');
   const [isOvertime, setIsOvertime] = useState(false);
   const [progressPct, setProgressPct] = useState(0);
 
+  // Double-tap protection (immediate synchronous ref guard)
+  const isActionInFlightRef = useRef(false);
+
   const isBypassUser = Boolean(user?.geoBypass);
 
-  // ── 1. Fetch Today Attendance Status ──
+  // ── 1. Fetch Today Attendance Status ──────────────────────────────────────
   const { data: todayData, isLoading, refetch } = useQuery({
     queryKey: ['today-status'],
     queryFn: () => attendanceApi.getToday().then((res) => res.data.data),
@@ -62,97 +77,67 @@ export default function AttendanceScreen() {
   const isCheckedOut = !!record?.outTime;
   const currentWorkMode = record?.workMode || workMode;
 
-  // Read actual shift duration from API (fullDayMinutes from WorkingHours)
   const fullDayMinutes = office?.fullDayMinutes ?? 480;
 
+  // ── 2. Load tasks on mount ────────────────────────────────────────────────
   useEffect(() => {
     fetchTodayTasks();
   }, [fetchTodayTasks]);
 
-  // ── 2. Geo Location Verification ──
-  // Note: geoStatus is NOT in the dependency array to prevent race condition
-  const verifyLocation = useCallback(async (officeObj: any, forceRefresh = false) => {
-    if (!officeObj) {
-      setGeoStatus('valid');
-      return 'valid';
+  const officeLat = office?.lat;
+  const officeLng = office?.lng;
+  const officeRadius = office?.radius;
+
+  // ── 3. Trigger geo verification (Office mode only) ────────────────────────
+  useEffect(() => {
+    if (isCheckedOut || isBypassUser || workMode !== 'Office') {
+      resetGeoStatus('valid');
+      return;
     }
+    if (!office) {
+      resetGeoStatus('valid');
+      return;
+    }
+    verifyLocation(office, { forceRefresh: false });
+  }, [officeLat, officeLng, officeRadius, isCheckedOut, isBypassUser, workMode, verifyLocation, resetGeoStatus]);
 
-    if (isVerifyingGeoRef.current) return;
-    isVerifyingGeoRef.current = true;
-    setGeoStatus('checking');
-
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setGeoStatus('permission_denied');
-        isVerifyingGeoRef.current = false;
-        return 'permission_denied';
-      }
-
-      // Try last-known position first (unless forceRefresh)
-      if (!forceRefresh) {
-        const last = await Location.getLastKnownPositionAsync({ maxAge: 15000 }); // max 15s old
-        if (last?.coords) {
-          const dist = calculateDistance(
-            last.coords.latitude,
-            last.coords.longitude,
-            officeObj.lat,
-            officeObj.lng
-          );
-          setGeoDistance(Math.round(dist));
-          setUserLocation({ latitude: last.coords.latitude, longitude: last.coords.longitude });
-          if (dist <= officeObj.radius) {
-            setGeoStatus('valid');
-            isVerifyingGeoRef.current = false;
-            return 'valid';
-          }
+  // ── 4. Re-verify when app comes back to foreground ────────────────────────
+  useEffect(() => {
+    const handleAppState = (nextState: AppStateStatus) => {
+      if (nextState === 'active' && !isCheckedOut && !isBypassUser && workMode === 'Office' && office) {
+        if (geoStatus !== 'valid' && geoStatus !== 'checking') {
+          verifyLocation(office, { forceRefresh: true });
         }
       }
+    };
+    const sub = AppState.addEventListener('change', handleAppState);
+    return () => sub.remove();
+  }, [isCheckedOut, isBypassUser, workMode, office, geoStatus, verifyLocation]);
 
-      // Get fresh position
-      const loc = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-
-      if (loc?.coords) {
-        const locCoords = { latitude: loc.coords.latitude, longitude: loc.coords.longitude };
-        setUserLocation(locCoords);
-        const dist = calculateDistance(
-          loc.coords.latitude,
-          loc.coords.longitude,
-          officeObj.lat,
-          officeObj.lng
-        );
-        const distRounded = Math.round(dist);
-        setGeoDistance(distRounded);
-        const finalStatus = dist <= officeObj.radius ? 'valid' : 'invalid';
-        setGeoStatus(finalStatus);
-        isVerifyingGeoRef.current = false;
-        return finalStatus;
-      }
-
-      setGeoStatus('error');
-      isVerifyingGeoRef.current = false;
-      return 'error';
-    } catch (err) {
-      console.error('[Attendance] Geo error:', err);
-      setGeoStatus('error');
-      isVerifyingGeoRef.current = false;
-      return 'error';
-    }
-  }, []); // Empty deps — no stale closure issue with ref-based guard
-
+  // ── 5. Periodic Field Location Tracking ───────────────────────────────────
   useEffect(() => {
-    if (isCheckedOut || isBypassUser || currentWorkMode !== 'Office') {
-      setGeoStatus('valid');
-    } else if (office) {
-      verifyLocation(office);
-    } else {
-      setGeoStatus('valid');
-    }
-  }, [office, isCheckedOut, isBypassUser, currentWorkMode]); // verifyLocation is stable
+    if (!isCheckedIn || currentWorkMode !== 'Field') return;
 
-  // ── 3. Live Shift Timer (uses real fullDayMinutes from API) ──
+    const track = async () => {
+      const result = await getLocation({ accuracy: 3, timeout: 10_000 });
+      if (result.type === 'success' && result.coords) {
+        try {
+          await attendanceApi.trackLocation({
+            latitude: result.coords.latitude,
+            longitude: result.coords.longitude,
+          });
+        } catch (err) {
+          console.log('[FieldTrack] Periodic track error:', err);
+        }
+      }
+    };
+
+    track();
+    const interval = setInterval(track, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [isCheckedIn, currentWorkMode]);
+
+  // ── 6. Live Shift Timer ───────────────────────────────────────────────────
   useEffect(() => {
     if (!isCheckedIn || !record?.inTime) {
       setTimerDisplay('00:00:00');
@@ -176,12 +161,10 @@ export default function AttendanceScreen() {
       const s = Math.floor((absMs % 60000) / 1000);
       const pad = (n: number) => String(n).padStart(2, '0');
       setTimerDisplay(`${pad(h)}:${pad(m)}:${pad(s)}`);
-
-      const pct = (workedMs / shiftMs) * 100;
-      setProgressPct(Math.min(100, Math.max(0, pct)));
+      setProgressPct(Math.min(100, Math.max(0, (workedMs / shiftMs) * 100)));
     };
 
-    tick(); // Run immediately
+    tick();
     let interval = setInterval(tick, 1000);
 
     const subscription = AppState.addEventListener('change', (nextAppState) => {
@@ -200,70 +183,136 @@ export default function AttendanceScreen() {
     };
   }, [isCheckedIn, record?.inTime, fullDayMinutes]);
 
-  // ── 4. Start Shift Flow → Navigate to Check-In Task Screen ──
-  const handleStartCheckInFlow = async () => {
-    if (actionLoading) return;
+  // ── 7. Check-In Flow ──────────────────────────────────────────────────────
+  const handleStartCheckInFlow = useCallback(async () => {
+    if (isActionInFlightRef.current || actionLoading) return;
+    isActionInFlightRef.current = true;
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    let resolvedStatus = geoStatus;
-
-    if (!isBypassUser && currentWorkMode === 'Office' && geoStatus !== 'valid') {
-      setActionLoading(true);
-      const res = await verifyLocation(office, true);
-      setActionLoading(false);
-      resolvedStatus = res as typeof geoStatus;
-      if (resolvedStatus !== 'valid') {
-        Toast.show({
-          type: 'error',
-          text1: 'Out of Office Zone',
-          text2: `You are ${geoDistance}m away. Must be within ${office?.radius || 200}m.`,
+    try {
+      // Biometric authentication
+      const authResult = await authenticateBiometrics('Verify your identity to check in');
+      if (!authResult.success) {
+        showFeedback({
+          message: authResult.cancelled ? 'Authentication Cancelled' : 'Biometric Failed',
+          subMessage: authResult.cancelled ? undefined : (authResult.error || 'Authentication error'),
+          variant: authResult.cancelled ? 'warning' : 'error',
         });
         return;
       }
+
+      let resolvedStatus = geoStatus;
+
+      // Re-verify if not valid and in Office mode
+      if (!isBypassUser && workMode === 'Office' && geoStatus !== 'valid') {
+        setActionLoading(true);
+        showFeedback({ message: 'Verifying your location...', variant: 'loading', duration: 0 });
+
+        try {
+          const res = await verifyLocation(office, { forceRefresh: false });
+          resolvedStatus = res;
+        } finally {
+          setActionLoading(false);
+          hideFeedback();
+        }
+
+        if (resolvedStatus !== 'valid') {
+          if (resolvedStatus === 'gps_disabled') {
+            showFeedback({
+              message: 'GPS / Location Services Disabled',
+              subMessage: 'Please enable Location Services in your device settings.',
+              variant: 'warning',
+            });
+          } else if (resolvedStatus === 'permission_denied') {
+            showFeedback({
+              message: 'Location Permission Denied',
+              subMessage: 'Tap to open Settings and allow location access.',
+              variant: 'error',
+              duration: 5000,
+            });
+          } else if (resolvedStatus === 'timeout') {
+            showFeedback({
+              message: 'Location Timed Out',
+              subMessage: 'Could not get your location. Please try again.',
+              variant: 'warning',
+            });
+          } else if (resolvedStatus === 'invalid') {
+            showFeedback({
+              message: `Out of Office Zone — ${geoDistance}m away`,
+              subMessage: `Must be within ${office?.radius || 200}m of the office.`,
+              variant: 'error',
+            });
+          } else {
+            showFeedback({
+              message: 'Location Verification Failed',
+              subMessage: 'Could not determine your location. Please try again.',
+              variant: 'error',
+            });
+          }
+          return;
+        }
+      }
+
+      const lat = isBypassUser ? undefined : userLocation?.latitude;
+      const lng = isBypassUser ? undefined : userLocation?.longitude;
+
+      router.push({
+        pathname: '/(tabs)/attendance/check-in-tasks',
+        params: {
+          workMode,
+          latitude: lat != null && !isNaN(lat) ? String(lat) : undefined,
+          longitude: lng != null && !isNaN(lng) ? String(lng) : undefined,
+        },
+      });
+    } finally {
+      isActionInFlightRef.current = false;
+      setActionLoading(false);
     }
+  }, [actionLoading, geoStatus, isBypassUser, workMode, office, geoDistance, userLocation, authenticateBiometrics, verifyLocation, showFeedback, hideFeedback, router]);
 
-    // For bypass users, send undefined so backend records null coords (honest)
-    const lat = isBypassUser ? undefined : userLocation?.latitude;
-    const lng = isBypassUser ? undefined : userLocation?.longitude;
+  // ── 8. Check-Out Flow ─────────────────────────────────────────────────────
+  const handleStartCheckOutFlow = useCallback(async () => {
+    if (isActionInFlightRef.current || actionLoading) return;
+    isActionInFlightRef.current = true;
 
-    router.push({
-      pathname: '/(tabs)/attendance/check-in-tasks',
-      params: {
-        workMode,
-        latitude: lat != null ? String(lat) : undefined,
-        longitude: lng != null ? String(lng) : undefined,
-      },
-    });
-  };
-
-  // ── 5. End Shift Flow → Navigate to Check-Out Task Review Screen ──
-  const handleStartCheckOutFlow = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    const lat = isBypassUser ? undefined : userLocation?.latitude;
-    const lng = isBypassUser ? undefined : userLocation?.longitude;
+    try {
+      const authResult = await authenticateBiometrics('Verify your identity to check out');
+      if (!authResult.success) {
+        showFeedback({
+          message: authResult.cancelled ? 'Authentication Cancelled' : 'Biometric Failed',
+          subMessage: authResult.cancelled ? undefined : (authResult.error || 'Authentication error'),
+          variant: authResult.cancelled ? 'warning' : 'error',
+        });
+        return;
+      }
 
-    router.push({
-      pathname: '/(tabs)/attendance/check-out-tasks',
-      params: {
-        latitude: lat != null ? String(lat) : undefined,
-        longitude: lng != null ? String(lng) : undefined,
-      },
-    });
-  };
+      const lat = isBypassUser ? undefined : userLocation?.latitude;
+      const lng = isBypassUser ? undefined : userLocation?.longitude;
 
+      router.push({
+        pathname: '/(tabs)/attendance/check-out-tasks',
+        params: {
+          latitude: lat != null && !isNaN(lat) ? String(lat) : undefined,
+          longitude: lng != null && !isNaN(lng) ? String(lng) : undefined,
+        },
+      });
+    } finally {
+      isActionInFlightRef.current = false;
+      setActionLoading(false);
+    }
+  }, [actionLoading, isBypassUser, userLocation, authenticateBiometrics, showFeedback, router]);
+
+  // ── 9. canAct ─────────────────────────────────────────────────────────────
   const canAct = useMemo(() => {
     if (actionLoading) return false;
     if (isBypassUser || currentWorkMode !== 'Office') return true;
     return geoStatus === 'valid';
   }, [actionLoading, isBypassUser, currentWorkMode, geoStatus]);
 
-  const completedCount = tasks.filter((t) => t.status === 'Completed').length;
-  const totalCount = tasks.length;
-  const completionPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
-
-  const shiftTargetLabel = `${(fullDayMinutes / 60).toFixed(1).replace('.0', '')} hrs`;
-
+  // ── 10. Geo pill renderer ─────────────────────────────────────────────────
   const renderGeoPill = () => {
     if (isBypassUser) {
       return (
@@ -284,14 +333,18 @@ export default function AttendanceScreen() {
     }
 
     const map: Record<string, { color: string; bg: string; border: string; icon: any; text: string }> = {
-      checking: { color: colors.primary, bg: 'rgba(32,118,199,0.1)', border: 'rgba(32,118,199,0.25)', icon: 'sync', text: 'Verifying GPS...' },
-      valid: { color: '#059669', bg: 'rgba(5,150,105,0.1)', border: 'rgba(5,150,105,0.25)', icon: 'checkmark-circle', text: `In Office · ${geoDistance}m` },
-      invalid: { color: '#DC2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.25)', icon: 'close-circle', text: `Out of Range · ${geoDistance}m` },
-      error: { color: '#DC2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.25)', icon: 'alert-circle', text: 'GPS Error' },
-      permission_denied: { color: '#DC2626', bg: 'rgba(220,38,38,0.1)', border: 'rgba(220,38,38,0.25)', icon: 'alert-circle', text: 'GPS Denied' },
+      idle:              { color: colors.primary,  bg: 'rgba(32,118,199,0.1)',   border: 'rgba(32,118,199,0.25)',  icon: 'location-outline',  text: 'Awaiting GPS...' },
+      checking:          { color: colors.primary,  bg: 'rgba(32,118,199,0.1)',   border: 'rgba(32,118,199,0.25)',  icon: 'sync',              text: 'Verifying GPS...' },
+      valid:             { color: '#059669',        bg: 'rgba(5,150,105,0.1)',    border: 'rgba(5,150,105,0.25)',   icon: 'checkmark-circle',  text: `In Office · ${geoDistance}m` },
+      invalid:           { color: '#DC2626',        bg: 'rgba(220,38,38,0.1)',    border: 'rgba(220,38,38,0.25)',   icon: 'close-circle',      text: `Out of Range · ${geoDistance}m` },
+      error:             { color: '#DC2626',        bg: 'rgba(220,38,38,0.1)',    border: 'rgba(220,38,38,0.25)',   icon: 'alert-circle',      text: 'GPS Error' },
+      permission_denied: { color: '#DC2626',        bg: 'rgba(220,38,38,0.1)',    border: 'rgba(220,38,38,0.25)',   icon: 'lock-closed',       text: 'GPS Denied' },
+      gps_disabled:      { color: '#D97706',        bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.25)', icon: 'location-outline',  text: 'GPS Off' },
+      timeout:           { color: '#D97706',        bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.25)', icon: 'timer-outline',     text: 'GPS Timeout' },
+      low_accuracy:      { color: '#D97706',        bg: 'rgba(245,158,11,0.1)',   border: 'rgba(245,158,11,0.25)', icon: 'warning',           text: 'Low Accuracy' },
     };
 
-    const s = map[geoStatus] || map.checking;
+    const s = map[geoStatus] || map.idle;
     return (
       <View style={[styles.geoPill, { backgroundColor: s.bg, borderColor: s.border }]}>
         <Ionicons name={s.icon} size={14} color={s.color} />
@@ -300,23 +353,28 @@ export default function AttendanceScreen() {
     );
   };
 
+  // ── Derived data ──────────────────────────────────────────────────────────
+  const completedCount = tasks.filter((t) => t.status === 'Completed').length;
+  const totalCount = tasks.length;
+  const completionPct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+  const shiftTargetLabel = `${(fullDayMinutes / 60).toFixed(1).replace('.0', '')} hrs`;
+
+  // ── Loading skeleton ──────────────────────────────────────────────────────
   if (isLoading) {
     return (
       <View style={[styles.container, { backgroundColor: theme.background }]}>
         <ScreenHeader title="Work Session" subtitle="Shift & Task Management" />
-        <ScrollView contentContainerStyle={styles.content}>
-          <Skeleton width="100%" height={180} borderRadius={24} />
-          <Skeleton width="100%" height={60} borderRadius={16} />
-          <Skeleton width="100%" height={60} borderRadius={16} />
-          <Skeleton width="100%" height={120} borderRadius={16} />
+        <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+          <AttendanceMainSkeleton />
         </ScrollView>
       </View>
     );
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <ScreenHeader title="Work Session" subtitle="Shift & Task Management" />
+      <ScreenHeader title="Work Session" />
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -327,6 +385,9 @@ export default function AttendanceScreen() {
             onRefresh={() => {
               refetch();
               fetchTodayTasks();
+              if (!isBypassUser && workMode === 'Office' && office && !isCheckedOut) {
+                verifyLocation(office, { forceRefresh: true });
+              }
             }}
             tintColor={colors.primary}
           />
@@ -336,7 +397,12 @@ export default function AttendanceScreen() {
         <View style={styles.statusRow}>
           {renderGeoPill()}
           {!isBypassUser && currentWorkMode === 'Office' && (
-            <TouchableOpacity onPress={() => verifyLocation(office, true)} style={styles.refreshBtn}>
+            <TouchableOpacity
+              onPress={() => {
+                if (office) verifyLocation(office, { forceRefresh: true });
+              }}
+              style={styles.refreshBtn}
+            >
               <Ionicons name="refresh" size={16} color={colors.primary} />
             </TouchableOpacity>
           )}
@@ -368,9 +434,7 @@ export default function AttendanceScreen() {
                       ]}
                     />
                   </View>
-                  <Text style={styles.progressSub}>
-                    Shift target: {shiftTargetLabel}
-                  </Text>
+                  <Text style={styles.progressSub}>Shift target: {shiftTargetLabel}</Text>
                 </View>
               </View>
             ) : isCheckedOut ? (
@@ -391,7 +455,7 @@ export default function AttendanceScreen() {
               </View>
             )}
 
-            {/* Mode selection if idle */}
+            {/* Mode selection */}
             {!isCheckedIn && !isCheckedOut && (
               <View style={styles.modeRow}>
                 {(['Office', 'WFH', 'Field'] as const).map((m) => (
@@ -408,9 +472,7 @@ export default function AttendanceScreen() {
                       size={14}
                       color={workMode === m ? colors.primary : 'rgba(255,255,255,0.8)'}
                     />
-                    <Text style={[styles.modeBtnText, workMode === m && styles.modeBtnTextActive]}>
-                      {m}
-                    </Text>
+                    <Text style={[styles.modeBtnText, workMode === m && styles.modeBtnTextActive]}>{m}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -422,7 +484,8 @@ export default function AttendanceScreen() {
                 <TouchableOpacity
                   style={[styles.actionBtn, !canAct && styles.actionBtnDisabled]}
                   onPress={handleStartCheckInFlow}
-                  disabled={!canAct}
+                  disabled={!canAct || actionLoading}
+                  activeOpacity={0.85}
                 >
                   <LinearGradient colors={['#FFFFFF', '#F1F5F9']} style={styles.actionBtnGradient}>
                     <Ionicons name="log-in-outline" size={20} color={colors.primary} />
@@ -432,7 +495,12 @@ export default function AttendanceScreen() {
                   </LinearGradient>
                 </TouchableOpacity>
               ) : isCheckedIn ? (
-                <TouchableOpacity style={styles.actionBtn} onPress={handleStartCheckOutFlow}>
+                <TouchableOpacity
+                  style={styles.actionBtn}
+                  onPress={handleStartCheckOutFlow}
+                  disabled={actionLoading}
+                  activeOpacity={0.85}
+                >
                   <LinearGradient colors={['#EF4444', '#B91C1C']} style={styles.actionBtnGradient}>
                     <Ionicons name="log-out-outline" size={20} color="#FFFFFF" />
                     <Text style={[styles.actionBtnText, { color: '#FFFFFF' }]}>
@@ -508,7 +576,6 @@ export default function AttendanceScreen() {
                   : 'Assign tasks during check-in to structure your day'}
               </Text>
             </View>
-
             <TouchableOpacity
               onPress={() => router.push('/(tabs)/attendance/tasks')}
               style={[styles.manageBtn, { backgroundColor: 'rgba(32,118,199,0.1)' }]}
@@ -524,10 +591,7 @@ export default function AttendanceScreen() {
                 <View
                   style={[
                     styles.taskProgressFill,
-                    {
-                      width: `${completionPct}%` as any,
-                      backgroundColor: completionPct === 100 ? colors.success : colors.primary,
-                    },
+                    { width: `${completionPct}%` as any, backgroundColor: completionPct === 100 ? colors.success : colors.primary },
                   ]}
                 />
               </View>
@@ -545,10 +609,7 @@ export default function AttendanceScreen() {
             ))}
 
             {tasks.length > 3 && (
-              <TouchableOpacity
-                onPress={() => router.push('/(tabs)/attendance/tasks')}
-                style={styles.moreTasksBtn}
-              >
+              <TouchableOpacity onPress={() => router.push('/(tabs)/attendance/tasks')} style={styles.moreTasksBtn}>
                 <Text style={[styles.moreTasksText, { color: colors.primary }]}>
                   +{tasks.length - 3} more in Task Hub →
                 </Text>
@@ -571,8 +632,8 @@ export default function AttendanceScreen() {
         <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>Duty Metrics</Text>
         <View style={styles.metricsGrid}>
           {[
-            { icon: 'log-in-outline' as const, color: '#10B981', bg: 'rgba(16,185,129,0.1)', label: 'Check In', value: record?.inTime ? format(new Date(record.inTime), 'hh:mm a') : '--:--' },
-            { icon: 'log-out-outline' as const, color: colors.primary, bg: 'rgba(32,118,199,0.1)', label: 'Check Out', value: record?.outTime ? format(new Date(record.outTime), 'hh:mm a') : '--:--' },
+            { icon: 'log-in-outline' as const, color: '#10B981', bg: 'rgba(16,185,129,0.1)', label: 'Check In', value: record?.inTime ? safeFormat(record.inTime, 'hh:mm a') : '--:--' },
+            { icon: 'log-out-outline' as const, color: colors.primary, bg: 'rgba(32,118,199,0.1)', label: 'Check Out', value: record?.outTime ? safeFormat(record.outTime, 'hh:mm a') : '--:--' },
             { icon: 'hourglass-outline' as const, color: '#F59E0B', bg: 'rgba(245,158,11,0.1)', label: 'Total Hours', value: record?.totalHours ? `${record.totalHours.toFixed(1)}h` : '0.0h' },
             { icon: 'calendar-outline' as const, color: '#7C3AED', bg: 'rgba(124,58,237,0.1)', label: 'Duty Status', value: isCheckedOut ? 'DONE' : isCheckedIn ? 'ACTIVE' : 'PENDING' },
           ].map((m) => (
@@ -600,13 +661,30 @@ export default function AttendanceScreen() {
           </View>
         )}
       </ScrollView>
+
+      {/* PhonePe-style Feedback */}
+      <AttendanceFeedback
+        visible={feedbackState.visible}
+        message={feedbackState.message}
+        subMessage={feedbackState.subMessage}
+        variant={feedbackState.variant}
+        onHide={hideFeedback}
+      />
     </View>
+  );
+}
+
+export default function AttendanceScreen() {
+  return (
+    <ErrorBoundary>
+      <AttendanceContent />
+    </ErrorBoundary>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { padding: 20, gap: 16, paddingBottom: 40 },
+  content: { padding: 20, gap: 16, paddingBottom: 120 },
   statusRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   geoPill: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   geoText: { fontSize: 12, fontWeight: '700' },
@@ -670,3 +748,4 @@ const styles = StyleSheet.create({
   lateTitle: { fontSize: 14, fontWeight: '800', color: '#D97706' },
   lateSub: { fontSize: 12, color: '#92400E', marginTop: 2 },
 });
+
