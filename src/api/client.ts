@@ -15,19 +15,20 @@ const client = axios.create({
 // Attach Token
 client.interceptors.request.use(async (config) => {
   try {
-    let token: string | null = null;
-    try {
-      token = await SecureStore.getItemAsync('accessToken');
-    } catch {
-      // SecureStore not available on this platform
+    // 1. Primary: Instant synchronous read from in-memory Zustand store
+    let token: string | null = useAuthStore.getState().token;
+
+    // 2. Secondary fallback: Storage
+    if (!token) {
+      try {
+        token = await SecureStore.getItemAsync('accessToken');
+      } catch {}
     }
 
     if (!token) {
       try {
         token = await AsyncStorage.getItem('accessToken');
-      } catch {
-        // AsyncStorage error
-      }
+      } catch {}
     }
 
     if (!token && typeof window !== 'undefined' && window.localStorage) {
@@ -80,60 +81,50 @@ client.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        let refreshToken: string | null = null;
-        try {
-          refreshToken = await SecureStore.getItemAsync('refreshToken');
-        } catch {
-          // SecureStore not available
+        // 1. Primary: In-memory refresh token
+        let refreshToken: string | null = useAuthStore.getState().refreshToken;
+
+        // 2. Secondary: Storage lookup
+        if (!refreshToken) {
+          try {
+            refreshToken = await SecureStore.getItemAsync('refreshToken');
+          } catch {}
         }
 
         if (!refreshToken) {
           try {
             refreshToken = await AsyncStorage.getItem('refreshToken');
-          } catch {
-            // AsyncStorage error
-          }
+          } catch {}
         }
 
         if (!refreshToken && typeof window !== 'undefined' && window.localStorage) {
           refreshToken = window.localStorage.getItem('refreshToken');
         }
+
         if (!refreshToken) throw new Error('No refresh token');
 
         const { data } = await axios.post(`${CONFIG.API_BASE_URL}/auth/refresh`, { refreshToken });
         const newToken = data.data.accessToken;
         const newRefreshToken = data.data.refreshToken;
 
-        try {
-          await SecureStore.setItemAsync('accessToken', newToken);
-        } catch {}
-        try {
-          await AsyncStorage.setItem('accessToken', newToken);
-        } catch {}
-        if (typeof window !== 'undefined' && window.localStorage) {
-          window.localStorage.setItem('accessToken', newToken);
-        }
-
-        if (newRefreshToken) {
-          try {
-            await SecureStore.setItemAsync('refreshToken', newRefreshToken);
-          } catch {}
-          try {
-            await AsyncStorage.setItem('refreshToken', newRefreshToken);
-          } catch {}
-          if (typeof window !== 'undefined' && window.localStorage) {
-            window.localStorage.setItem('refreshToken', newRefreshToken);
-          }
+        // Sync with Zustand store & storage
+        const currentUser = useAuthStore.getState().user;
+        if (currentUser) {
+          await useAuthStore.getState().setAuth(currentUser, newToken, newRefreshToken);
         }
 
         processQueue(null, newToken);
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
         return client(originalRequest);
-      } catch (err) {
+      } catch (err: any) {
         processQueue(err, null);
-        try {
-          await useAuthStore.getState().logout();
-        } catch (_) {}
+        // Only log out if refresh token endpoint explicitly confirmed token is invalid/expired
+        const isAuthRejection = err?.response?.status === 401 || err?.response?.status === 403 || err?.message === 'No refresh token';
+        if (isAuthRejection) {
+          try {
+            await useAuthStore.getState().logout();
+          } catch (_) {}
+        }
         return Promise.reject(err);
       } finally {
         isRefreshing = false;

@@ -139,11 +139,8 @@ function CheckInTasksContent() {
       qc.invalidateQueries({ queryKey: ['my-attendance-summary'] });
       fetchTodayTasks().catch(() => {});
 
-      if (router.canGoBack()) {
-        router.back();
-      } else {
-        router.replace('/(tabs)/attendance');
-      }
+      // Always navigate directly to Attendance screen to prevent history pop to login
+      router.replace('/(tabs)/attendance');
     },
     onError: (err: any) => {
       isSubmittingRef.current = false;

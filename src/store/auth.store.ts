@@ -35,6 +35,8 @@ export interface User {
 
 interface AuthState {
   user: User | null;
+  token: string | null;
+  refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
   setAuth: (user: User, accessToken: string, refreshToken?: string) => Promise<void>;
@@ -45,6 +47,8 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
+  token: null,
+  refreshToken: null,
   isAuthenticated: false,
   isLoading: true,
 
@@ -69,7 +73,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         if (refreshToken) window.localStorage.setItem('refreshToken', refreshToken);
       }
       await AsyncStorage.setItem('authUser', JSON.stringify(user));
-      set({ user, isAuthenticated: true, isLoading: false });
+      set({
+        user,
+        token: accessToken,
+        refreshToken: refreshToken || null,
+        isAuthenticated: true,
+        isLoading: false,
+      });
     } catch (err) {
       console.error('Failed to save auth to storage', err);
     }
@@ -103,7 +113,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch (err) {
       console.error('Failed to clear storage during logout', err);
     }
-    set({ user: null, isAuthenticated: false, isLoading: false });
+    set({
+      user: null,
+      token: null,
+      refreshToken: null,
+      isAuthenticated: false,
+      isLoading: false,
+    });
   },
 
   loadAuthFromStorage: async () => {
@@ -123,17 +139,50 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         token = window.localStorage.getItem('accessToken');
       }
 
+      let refreshToken: string | null = null;
+      try {
+        refreshToken = await SecureStore.getItemAsync('refreshToken');
+      } catch {}
+
+      if (!refreshToken) {
+        try {
+          refreshToken = await AsyncStorage.getItem('refreshToken');
+        } catch {}
+      }
+
+      if (!refreshToken && typeof window !== 'undefined' && window.localStorage) {
+        refreshToken = window.localStorage.getItem('refreshToken');
+      }
+
       const userJson = await AsyncStorage.getItem('authUser');
 
       if (token && userJson) {
         const user = JSON.parse(userJson);
-        set({ user, isAuthenticated: true, isLoading: false });
+        set({
+          user,
+          token,
+          refreshToken,
+          isAuthenticated: true,
+          isLoading: false,
+        });
       } else {
-        set({ user: null, isAuthenticated: false, isLoading: false });
+        set({
+          user: null,
+          token: null,
+          refreshToken: null,
+          isAuthenticated: false,
+          isLoading: false,
+        });
       }
     } catch (err) {
       console.error('Failed to load auth from storage', err);
-      set({ user: null, isAuthenticated: false, isLoading: false });
+      set({
+        user: null,
+        token: null,
+        refreshToken: null,
+        isAuthenticated: false,
+        isLoading: false,
+      });
     }
   },
 }));
