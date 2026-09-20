@@ -2,7 +2,7 @@
   "expo": {
     "name": "WorknAI HRMS",
     "slug": "workn-ai-hrms",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/logo.png",
     "scheme": "workn-ai-hrms",
@@ -86,7 +86,8 @@
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/3e55485f-7ce5-47f6-a011-6ddd958b88c0"
+      "url": "https://u.expo.dev/3e55485f-7ce5-47f6-a011-6ddd958b88c0",
+      "checkAutomatically": "ON_ERROR_RECOVERY"
     }
   }
 }

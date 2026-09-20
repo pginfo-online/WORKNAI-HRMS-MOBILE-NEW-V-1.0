@@ -52,7 +52,7 @@ function AttendanceContent() {
   const { feedbackState, showFeedback, hideFeedback } = useAttendanceFeedback();
 
   // ── Local State ───────────────────────────────────────────────────────────
-  const [workMode, setWorkMode] = useState<'Office' | 'WFH' | 'Field'>('Office');
+  const [workMode, setWorkMode] = useState<'Office' | 'WFH'>('Office');
   const [actionLoading, setActionLoading] = useState(false);
 
   // Live Timer & Shift metrics
@@ -77,7 +77,7 @@ function AttendanceContent() {
   const isCheckedOut = !!record?.outTime;
   const currentWorkMode = record?.workMode || workMode;
 
-  const fullDayMinutes = office?.fullDayMinutes ?? 480;
+  const fullDayMinutes = todayData?.fullDayMinutes ?? office?.fullDayMinutes ?? 540;
 
   // ── 2. Load tasks on mount ────────────────────────────────────────────────
   useEffect(() => {
@@ -113,29 +113,6 @@ function AttendanceContent() {
     const sub = AppState.addEventListener('change', handleAppState);
     return () => sub.remove();
   }, [isCheckedOut, isBypassUser, workMode, office, geoStatus, verifyLocation]);
-
-  // ── 5. Periodic Field Location Tracking ───────────────────────────────────
-  useEffect(() => {
-    if (!isCheckedIn || currentWorkMode !== 'Field') return;
-
-    const track = async () => {
-      const result = await getLocation({ accuracy: 3, timeout: 10_000 });
-      if (result.type === 'success' && result.coords) {
-        try {
-          await attendanceApi.trackLocation({
-            latitude: result.coords.latitude,
-            longitude: result.coords.longitude,
-          });
-        } catch (err) {
-          console.log('[FieldTrack] Periodic track error:', err);
-        }
-      }
-    };
-
-    track();
-    const interval = setInterval(track, 5 * 60 * 1000);
-    return () => clearInterval(interval);
-  }, [isCheckedIn, currentWorkMode]);
 
   // ── 6. Live Shift Timer ───────────────────────────────────────────────────
   useEffect(() => {
@@ -458,7 +435,7 @@ function AttendanceContent() {
             {/* Mode selection */}
             {!isCheckedIn && !isCheckedOut && (
               <View style={styles.modeRow}>
-                {(['Office', 'WFH', 'Field'] as const).map((m) => (
+                {(['Office', 'WFH'] as const).map((m) => (
                   <TouchableOpacity
                     key={m}
                     onPress={() => {
@@ -468,7 +445,7 @@ function AttendanceContent() {
                     style={[styles.modeBtn, workMode === m && styles.modeBtnActive]}
                   >
                     <Ionicons
-                      name={m === 'Office' ? 'business-outline' : m === 'WFH' ? 'home-outline' : 'navigate-outline'}
+                      name={m === 'Office' ? 'business-outline' : 'home-outline'}
                       size={14}
                       color={workMode === m ? colors.primary : 'rgba(255,255,255,0.8)'}
                     />

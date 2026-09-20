@@ -29,6 +29,10 @@ function DayDetailContent() {
     workMode?: string;
     isLate?: string;
     lateMinutes?: string;
+    isEarlyCheckout?: string;
+    earlyCheckoutMinutes?: string;
+    overtimeMinutes?: string;
+    shortfallMinutes?: string;
     isHoliday?: string;
     holidayName?: string;
     isWeekOff?: string;
@@ -59,7 +63,11 @@ function DayDetailContent() {
   const totalHoursStr = params.totalHours || (legacyData?.record?.totalHours ? String(legacyData.record.totalHours) : '');
   const workMode = params.workMode || legacyData?.record?.workMode || 'Office';
   const isLate = params.isLate === '1' || legacyData?.record?.isLate;
-  const lateMinutes = params.lateMinutes || legacyData?.record?.lateMinutes || 0;
+  const lateMinutes = Number(params.lateMinutes || legacyData?.record?.lateMinutes || 0);
+  const isEarlyCheckout = params.isEarlyCheckout === '1' || legacyData?.record?.isEarlyCheckout;
+  const earlyCheckoutMinutes = Number(params.earlyCheckoutMinutes || legacyData?.record?.earlyCheckoutMinutes || 0);
+  const overtimeMinutes = Number(params.overtimeMinutes || legacyData?.record?.overtimeMinutes || 0);
+  const shortfallMinutes = Number(params.shortfallMinutes || legacyData?.record?.shortfallMinutes || 0);
 
   const todayWork = params.todayWork || legacyData?.record?.todayWork || '';
   const pendingWork = params.pendingWork || legacyData?.record?.pendingWork || '';
@@ -123,6 +131,28 @@ function DayDetailContent() {
           color: '#7C3AED',
           bg: 'rgba(124,58,237,0.1)',
         },
+        ...(overtimeMinutes > 0
+          ? [
+              {
+                icon: 'trending-up-outline' as const,
+                label: 'Overtime',
+                value: `${overtimeMinutes}m`,
+                color: '#10B981',
+                bg: 'rgba(16,185,129,0.1)',
+              },
+            ]
+          : []),
+        ...(shortfallMinutes > 0
+          ? [
+              {
+                icon: 'trending-down-outline' as const,
+                label: 'Shortfall',
+                value: `${shortfallMinutes}m`,
+                color: '#EF4444',
+                bg: 'rgba(239,68,68,0.1)',
+              },
+            ]
+          : []),
       ]
     : [];
 
@@ -155,6 +185,15 @@ function DayDetailContent() {
               <Ionicons name="warning-outline" size={16} color="#D97706" />
               <Text style={[styles.lateText, { color: '#D97706' }]}>
                 Late by {lateMinutes} minutes
+              </Text>
+            </View>
+          )}
+
+          {isEarlyCheckout && (
+            <View style={[styles.lateBanner, { backgroundColor: 'rgba(239,68,68,0.1)', borderColor: 'rgba(239,68,68,0.3)', marginTop: isLate ? 8 : 0 }]}>
+              <Ionicons name="exit-outline" size={16} color="#DC2626" />
+              <Text style={[styles.lateText, { color: '#DC2626' }]}>
+                Early checkout by {earlyCheckoutMinutes} minutes
               </Text>
             </View>
           )}

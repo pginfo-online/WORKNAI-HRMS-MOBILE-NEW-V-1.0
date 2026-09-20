@@ -101,7 +101,7 @@ export function useLocationVerification(): UseLocationVerificationReturn {
       office: OfficeGeofence | null | undefined,
       options: { forceRefresh?: boolean } = {}
     ): Promise<GeoStatus> => {
-      // ── No office: always valid (WFH / Field / bypass) ───────────────────
+      // ── No office: always valid (WFH / bypass) ───────────────────
       if (!office) {
         lastStatusRef.current = 'valid';
         if (isMountedRef.current) setGeoStatus('valid');

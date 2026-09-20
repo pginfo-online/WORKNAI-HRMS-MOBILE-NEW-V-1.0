@@ -38,7 +38,15 @@ const STATUS_OPTIONS: { id: TargetStatus; label: string; icon: keyof typeof Ioni
 
 function CorrectionContent() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ prefillDate?: string }>();
+  const params = useLocalSearchParams<{
+    prefillDate?: string;
+    correctionId?: string;
+    prefillReason?: string;
+    prefillStatus?: TargetStatus;
+    prefillInTime?: string;
+    prefillOutTime?: string;
+  }>();
+  const isEditing = Boolean(params.correctionId);
   const { theme, isDark } = useUIStore();
   const { feedbackState, showFeedback, hideFeedback } = useAttendanceFeedback();
 
@@ -49,10 +57,22 @@ function CorrectionContent() {
     }
     return null;
   });
-  const [requestedStatus, setRequestedStatus] = useState<TargetStatus>('P');
-  const [requestedInTime, setRequestedInTime] = useState<Date | null>(null);
-  const [requestedOutTime, setRequestedOutTime] = useState<Date | null>(null);
-  const [reason, setReason] = useState('');
+  const [requestedStatus, setRequestedStatus] = useState<TargetStatus>(params.prefillStatus || 'P');
+  const [requestedInTime, setRequestedInTime] = useState<Date | null>(() => {
+    if (params.prefillInTime) {
+      const parsed = new Date(params.prefillInTime);
+      return isNaN(parsed.getTime()) ? null : parsed;
+    }
+    return null;
+  });
+  const [requestedOutTime, setRequestedOutTime] = useState<Date | null>(() => {
+    if (params.prefillOutTime) {
+      const parsed = new Date(params.prefillOutTime);
+      return isNaN(parsed.getTime()) ? null : parsed;
+    }
+    return null;
+  });
+  const [reason, setReason] = useState(params.prefillReason || '');
   const [proofImageUri, setProofImageUri] = useState<string | null>(null);
 
   const [pickerMode, setPickerMode] = useState<PickerMode>(null);
@@ -64,6 +84,13 @@ function CorrectionContent() {
   const REASON_MAX = 300;
 
   const selectedDateStr = selectedDate ? safeFormat(selectedDate, 'yyyy-MM-dd', '') : '';
+  
+  const { data: todayData } = useQuery({
+    queryKey: ['today-status'],
+    queryFn: () => attendanceApi.getToday().then((res) => res.data.data),
+  });
+  const office = todayData?.office;
+
   const { data: recordData, isLoading: recordLoading } = useQuery({
     queryKey: ['attendance-record', selectedDateStr],
     queryFn: () =>
@@ -72,24 +99,33 @@ function CorrectionContent() {
     enabled: !!selectedDateStr,
   });
 
-  // Auto-set default times and status based on selected date
+  const parseConfigTime = (timeStr?: string, defaultHour = 9, defaultMinute = 30) => {
+    if (!timeStr) return { hour: defaultHour, minute: defaultMinute };
+    const [h, m] = timeStr.split(':').map(Number);
+    return { hour: isNaN(h) ? defaultHour : h, minute: isNaN(m) ? defaultMinute : m };
+  };
+
+  // Auto-set default times and status based on selected date and dynamic office timing
   useEffect(() => {
     if (selectedDate) {
       if (recordData?.isHoliday) {
         setRequestedStatus('Coff');
       }
+      const inCfg = parseConfigTime(office?.checkInTime, 9, 30);
+      const outCfg = parseConfigTime(office?.checkOutTime, 18, 30);
+
       if (!requestedInTime) {
         const dIn = new Date(selectedDate);
-        dIn.setHours(9, 30, 0, 0);
+        dIn.setHours(inCfg.hour, inCfg.minute, 0, 0);
         setRequestedInTime(dIn);
       }
       if (!requestedOutTime) {
         const dOut = new Date(selectedDate);
-        dOut.setHours(18, 30, 0, 0);
+        dOut.setHours(outCfg.hour, outCfg.minute, 0, 0);
         setRequestedOutTime(dOut);
       }
     }
-  }, [selectedDate, recordData]);
+  }, [selectedDate, recordData, office]);
 
   const openPicker = (target: typeof pickerTarget, mode: PickerMode) => {
     setPickerTarget(target);
@@ -112,14 +148,17 @@ function CorrectionContent() {
   };
 
   const handleDateConfirm = (date: Date) => {
+    const inCfg = parseConfigTime(office?.checkInTime, 9, 30);
+    const outCfg = parseConfigTime(office?.checkOutTime, 18, 30);
+
     if (pickerTarget === 'date') {
       setSelectedDate(date);
       const dIn = new Date(date);
-      dIn.setHours(9, 30, 0, 0);
+      dIn.setHours(inCfg.hour, inCfg.minute, 0, 0);
       setRequestedInTime(dIn);
 
       const dOut = new Date(date);
-      dOut.setHours(18, 30, 0, 0);
+      dOut.setHours(outCfg.hour, outCfg.minute, 0, 0);
       setRequestedOutTime(dOut);
     } else if (pickerTarget === 'inTime') {
       setRequestedInTime(date);
@@ -132,22 +171,34 @@ function CorrectionContent() {
   const correctionMutation = useMutation({
     mutationFn: async () => {
       if (!selectedDate) throw new Error('NO_DATE');
-      await attendanceApi.requestCorrection({
-        attendanceId: recordData?.record?._id || undefined,
-        date: selectedDateStr,
-        requestedStatus,
-        requestedInTime: requestedInTime?.toISOString(),
-        requestedOutTime: requestedOutTime?.toISOString(),
-        correctionReason: reason.trim(),
-        correctionProofUrl: proofImageUri || undefined,
-      });
+      if (isEditing && params.correctionId) {
+        await attendanceApi.editCorrection(params.correctionId, {
+          requestedStatus,
+          requestedInTime: requestedInTime?.toISOString(),
+          requestedOutTime: requestedOutTime?.toISOString(),
+          correctionReason: reason.trim(),
+          correctionProofUrl: proofImageUri || undefined,
+        });
+      } else {
+        await attendanceApi.requestCorrection({
+          attendanceId: recordData?.record?._id || undefined,
+          date: selectedDateStr,
+          requestedStatus,
+          requestedInTime: requestedInTime?.toISOString(),
+          requestedOutTime: requestedOutTime?.toISOString(),
+          correctionReason: reason.trim(),
+          correctionProofUrl: proofImageUri || undefined,
+        });
+      }
     },
     onSuccess: () => {
       isSubmittingRef.current = false;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showFeedback({
-        message: 'Correction Submitted ✓',
-        subMessage: 'Your request has been submitted for HR review. Returning...',
+        message: isEditing ? 'Correction Updated ✓' : 'Correction Submitted ✓',
+        subMessage: isEditing
+          ? 'Your updated request has been submitted for HR review.'
+          : 'Your request has been submitted for HR review. Returning...',
         variant: 'success',
         duration: 2500,
       });
@@ -209,8 +260,8 @@ function CorrectionContent() {
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
       <ScreenHeader
-        title="Attendance Correction"
-        subtitle="Request correction for Absent, Holiday, or Log issues"
+        title={isEditing ? 'Edit Correction' : 'Attendance Correction'}
+        subtitle={isEditing ? 'Update pending request details' : 'Request correction for Absent, Holiday, or Log issues'}
         showBack
       />
 
@@ -354,7 +405,7 @@ function CorrectionContent() {
                 >
                   <Ionicons name="time-outline" size={18} color={requestedInTime ? colors.primary : theme.textTertiary} />
                   <Text style={[styles.pickerText, { color: requestedInTime ? theme.text : theme.textTertiary }]}>
-                    {requestedInTime ? safeFormat(requestedInTime, 'hh:mm a') : '09:30 AM'}
+                    {requestedInTime ? safeFormat(requestedInTime, 'hh:mm a') : (office?.checkInTime || 'Select Time')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -367,7 +418,7 @@ function CorrectionContent() {
                 >
                   <Ionicons name="time-outline" size={18} color={requestedOutTime ? colors.primary : theme.textTertiary} />
                   <Text style={[styles.pickerText, { color: requestedOutTime ? theme.text : theme.textTertiary }]}>
-                    {requestedOutTime ? safeFormat(requestedOutTime, 'hh:mm a') : '06:30 PM'}
+                    {requestedOutTime ? safeFormat(requestedOutTime, 'hh:mm a') : (office?.checkOutTime || 'Select Time')}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -415,7 +466,9 @@ function CorrectionContent() {
             {correctionMutation.isPending ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.submitBtnText}>Submit Correction Request</Text>
+              <Text style={styles.submitBtnText}>
+                {isEditing ? 'Update Correction Request' : 'Submit Correction Request'}
+              </Text>
             )}
           </TouchableOpacity>
         </ScrollView>

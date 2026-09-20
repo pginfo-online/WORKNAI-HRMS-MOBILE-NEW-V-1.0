@@ -41,7 +41,7 @@ function CheckOutTasksContent() {
   const { tasks: storeTasks, fetchTodayTasks } = useTaskStore();
   const { feedbackState, showFeedback, hideFeedback } = useAttendanceFeedback();
 
-  // Initialize once from store snapshot to avoid double-render
+  // Initialize once from store snapshot
   const [sessionTasks, setSessionTasks] = useState<TaskItem[]>(() => storeTasks);
   const [closingNotes, setClosingNotes] = useState('');
   const [issuesFaced, setIssuesFaced] = useState('');
@@ -67,7 +67,7 @@ function CheckOutTasksContent() {
     setSessionTasks((prev) =>
       prev.map((t) => {
         if (t._id === taskId) {
-          const nextStatus = t.status === 'Completed' ? 'In Progress' : 'Completed';
+          const nextStatus = t.status === 'Completed' ? 'Pending' : 'Completed';
           return {
             ...t,
             status: nextStatus,
@@ -76,6 +76,12 @@ function CheckOutTasksContent() {
         }
         return t;
       })
+    );
+  };
+
+  const updateTaskDescription = (taskId: string, description: string) => {
+    setSessionTasks((prev) =>
+      prev.map((t) => (t._id === taskId ? { ...t, description } : t))
     );
   };
 
@@ -94,7 +100,7 @@ function CheckOutTasksContent() {
         .map((t) => `• ${t.title}${t.description ? ` (${t.description})` : ''}`)
         .join('\n');
       const pendingStr = pendingTasks
-        .map((t) => `• ${t.title}${t.dueTime ? ` [Due: ${t.dueTime}]` : ''}`)
+        .map((t) => `• ${t.title}`)
         .join('\n');
       const todayWork =
         [completedStr, closingNotes.trim()].filter(Boolean).join('\n\nNotes:\n') ||
@@ -121,7 +127,7 @@ function CheckOutTasksContent() {
         } catch (_) {}
       }
 
-      // Execute task sync and checkout in parallel with 30s timeout
+      // Execute task sync (enforces Completed vs Pending, attaches descriptions) and checkout in parallel with 30s timeout
       const syncPromise = taskApi.syncCheckout(sessionTasks).catch(() => {});
       const checkOutPromise = attendanceApi.checkOut({
         latitude: lat,
@@ -130,6 +136,7 @@ function CheckOutTasksContent() {
         pendingWork,
         issuesFaced: issuesFaced.trim() || undefined,
         reportParticipants: selectedParticipants,
+        tasks: sessionTasks,
       });
 
       const timeoutPromise = new Promise((_, reject) =>
@@ -147,7 +154,6 @@ function CheckOutTasksContent() {
       isSubmittingRef.current = false;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Trigger background cache updates without blocking the UI navigation transition
       qc.invalidateQueries({ queryKey: ['today-status'] });
       qc.invalidateQueries({ queryKey: ['my-attendance-summary'] });
       fetchTodayTasks().catch(() => {});
@@ -187,12 +193,23 @@ function CheckOutTasksContent() {
   const handleConfirmCheckout = useCallback(() => {
     if (isSubmittingRef.current || checkOutMutation.isPending) return;
 
+    // Check if any completed task lacks description
+    const missingDesc = completedTasks.find((t) => !t.description || !t.description.trim());
+    if (missingDesc) {
+      Alert.alert(
+        'Completion Description Required',
+        `Please provide a completion description/update for "${missingDesc.title}".`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
     if (pendingTasks.length > 0) {
       Alert.alert(
-        'Pending Deliverables Remaining',
-        `You have ${pendingTasks.length} pending task(s). Are you sure you want to end your shift now?`,
+        'Incomplete Tasks Note',
+        `You have ${pendingTasks.length} pending task(s). These will be saved as Pending for today and will NOT be carried forward to tomorrow. Proceed with check-out?`,
         [
-          { text: 'Review Tasks', style: 'cancel' },
+          { text: 'Review Deliverables', style: 'cancel' },
           {
             text: 'Yes, End Shift',
             style: 'destructive',
@@ -207,7 +224,7 @@ function CheckOutTasksContent() {
       isSubmittingRef.current = true;
       checkOutMutation.mutate();
     }
-  }, [pendingTasks.length, checkOutMutation]);
+  }, [completedTasks, pendingTasks.length, checkOutMutation]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -254,7 +271,7 @@ function CheckOutTasksContent() {
                 </Text>
               </View>
               <Text style={[styles.sectionHint, { color: theme.textTertiary }]}>
-                Tap the checkbox if you completed any deliverable before leaving
+                Tap checkbox to mark as completed. Uncompleted tasks become Pending (not carried forward).
               </Text>
               <View style={styles.tasksList}>
                 {pendingTasks.map((t) => (
@@ -277,11 +294,8 @@ function CheckOutTasksContent() {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.taskTitle, { color: theme.text }]}>{t.title}</Text>
-                      {t.description ? (
-                        <Text style={[styles.taskDesc, { color: theme.textSecondary }]}>{t.description}</Text>
-                      ) : null}
-                      <Text style={[styles.taskMeta, { color: theme.textTertiary }]}>
-                        {t.priority} Priority{t.dueTime ? ` · Due ${t.dueTime}` : ''}
+                      <Text style={[styles.taskMeta, { color: colors.warning }]}>
+                        {t.priority} Priority · Pending
                       </Text>
                     </View>
                   </TouchableOpacity>
@@ -290,7 +304,7 @@ function CheckOutTasksContent() {
             </View>
           )}
 
-          {/* Completed Tasks */}
+          {/* Completed Tasks with Description Input */}
           {completedTasks.length > 0 && (
             <View style={styles.sectionBlock}>
               <View style={styles.sectionHeaderRow}>
@@ -299,35 +313,67 @@ function CheckOutTasksContent() {
                   Completed Deliverables ({completedTasks.length})
                 </Text>
               </View>
+              <Text style={[styles.sectionHint, { color: theme.textTertiary }]}>
+                Detailed completion description is required for every completed deliverable.
+              </Text>
               <View style={styles.tasksList}>
                 {completedTasks.map((t) => (
-                  <TouchableOpacity
+                  <View
                     key={t._id}
-                    activeOpacity={0.8}
-                    onPress={() => toggleTaskStatus(t._id)}
                     style={[
-                      styles.taskCard,
+                      styles.completedCard,
                       {
                         backgroundColor: theme.surface,
-                        borderColor: isDark ? 'rgba(16,185,129,0.3)' : 'rgba(16,185,129,0.25)',
+                        borderColor: !t.description?.trim() ? colors.warning : (isDark ? 'rgba(16,185,129,0.4)' : 'rgba(16,185,129,0.3)'),
                       },
                     ]}
                   >
-                    <View style={[styles.checkbox, { backgroundColor: colors.success, borderColor: colors.success }]}>
-                      <Ionicons name="checkmark" size={14} color="#FFFFFF" />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.taskTitle,
-                          { color: theme.textTertiary, textDecorationLine: 'line-through' },
-                        ]}
-                      >
-                        {t.title}
+                    <TouchableOpacity
+                      activeOpacity={0.8}
+                      onPress={() => toggleTaskStatus(t._id)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                    >
+                      <View style={[styles.checkbox, { backgroundColor: colors.success, borderColor: colors.success }]}>
+                        <Ionicons name="checkmark" size={14} color="#FFFFFF" />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.taskTitle,
+                            { color: theme.text, textDecorationLine: 'none' },
+                          ]}
+                        >
+                          {t.title}
+                        </Text>
+                        <Text style={[styles.taskMeta, { color: colors.success }]}>
+                          ✓ Completed ({t.priority} Priority)
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    {/* Description Input for Completed Task */}
+                    <View style={styles.descInputBox}>
+                      <Text style={[styles.descInputLabel, { color: !t.description?.trim() ? colors.error : colors.success }]}>
+                        Completion Notes / Deliverables * {!t.description?.trim() ? '(Required)' : '✓'}
                       </Text>
-                      <Text style={[styles.taskMeta, { color: colors.success }]}>Completed ✓</Text>
+                      <TextInput
+                        style={[
+                          styles.descInput,
+                          {
+                            backgroundColor: theme.surfaceAlt,
+                            color: theme.text,
+                            borderColor: !t.description?.trim() ? colors.error : theme.border,
+                          },
+                        ]}
+                        placeholder="Required: Provide details on what was finished for this task..."
+                        placeholderTextColor={theme.textTertiary}
+                        value={t.description || ''}
+                        onChangeText={(text) => updateTaskDescription(t._id, text)}
+                        multiline
+                        numberOfLines={2}
+                      />
                     </View>
-                  </TouchableOpacity>
+                  </View>
                 ))}
               </View>
             </View>
@@ -336,27 +382,27 @@ function CheckOutTasksContent() {
           {sessionTasks.length === 0 && (
             <Card style={styles.emptyCard}>
               <Ionicons name="information-circle-outline" size={32} color={colors.primary} />
-              <Text style={[styles.emptyTitle, { color: theme.text }]}>No session tasks logged</Text>
+              <Text style={[styles.emptyTitle, { color: theme.text }]}>No shift tasks logged</Text>
               <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
                 Please provide your end-of-day work summary below.
               </Text>
             </Card>
           )}
 
-          {/* Handover & Remarks */}
+          {/* Handover & Summary */}
           <Card style={styles.formCard}>
-            <Text style={[styles.cardHeading, { color: theme.text }]}>Handover & Summary</Text>
+            <Text style={[styles.cardHeading, { color: theme.text }]}>Shift Summary & Handoff</Text>
 
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
-                Additional Deliverable Notes (Optional)
+                Overall EOD Summary (Optional)
               </Text>
               <TextInput
                 style={[
                   styles.textArea,
                   { backgroundColor: theme.surfaceAlt, color: theme.text, borderColor: theme.border },
                 ]}
-                placeholder="Key links, PR numbers, meeting notes, or achievements..."
+                placeholder="High-level highlights, achievements, or summary notes..."
                 placeholderTextColor={theme.textTertiary}
                 value={closingNotes}
                 onChangeText={setClosingNotes}
@@ -367,7 +413,7 @@ function CheckOutTasksContent() {
 
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
-                Issues / Blockers Faced (Optional)
+                Blockers / Issues Faced (Optional)
               </Text>
               <TextInput
                 style={[
@@ -383,28 +429,35 @@ function CheckOutTasksContent() {
               />
             </View>
 
+            {/* Share With Management */}
             {managementEmps.length > 0 && (
               <View style={styles.inputGroup}>
                 <Text style={[styles.inputLabel, { color: theme.textSecondary }]}>
-                  Tag Management for Daily Report
+                  Share Report With Management
                 </Text>
                 <View style={styles.tagGrid}>
-                  {managementEmps.map((mgr) => {
-                    const selected = selectedParticipants.includes(mgr._id);
+                  {managementEmps.map((emp) => {
+                    const isSelected = selectedParticipants.includes(emp._id);
                     return (
                       <TouchableOpacity
-                        key={mgr._id}
-                        onPress={() => toggleParticipant(mgr._id)}
+                        key={emp._id}
+                        onPress={() => toggleParticipant(emp._id)}
+                        activeOpacity={0.75}
                         style={[
                           styles.tagChip,
                           {
-                            backgroundColor: selected ? colors.primary : theme.surfaceAlt,
-                            borderColor: selected ? colors.primary : theme.border,
+                            backgroundColor: isSelected ? colors.primary : theme.surfaceAlt,
+                            borderColor: isSelected ? colors.primary : theme.border,
                           },
                         ]}
                       >
-                        <Text style={[styles.tagText, { color: selected ? '#FFFFFF' : theme.text }]}>
-                          {mgr.name} ({mgr.role})
+                        <Text
+                          style={[
+                            styles.tagText,
+                            { color: isSelected ? '#FFFFFF' : theme.textSecondary },
+                          ]}
+                        >
+                          {emp.name} ({emp.role})
                         </Text>
                       </TouchableOpacity>
                     );
@@ -414,7 +467,7 @@ function CheckOutTasksContent() {
             )}
           </Card>
 
-          {/* Confirm Button */}
+          {/* Checkout Submit Button */}
           <View style={styles.bottomBar}>
             <TouchableOpacity
               onPress={handleConfirmCheckout}
@@ -422,7 +475,10 @@ function CheckOutTasksContent() {
               activeOpacity={0.85}
               style={[
                 styles.confirmBtn,
-                { backgroundColor: colors.error, opacity: checkOutMutation.isPending ? 0.75 : 1 },
+                {
+                  backgroundColor: colors.error,
+                  opacity: checkOutMutation.isPending ? 0.75 : 1,
+                },
               ]}
             >
               {checkOutMutation.isPending ? (
@@ -430,7 +486,7 @@ function CheckOutTasksContent() {
               ) : (
                 <>
                   <Ionicons name="log-out-outline" size={22} color="#FFFFFF" />
-                  <Text style={styles.confirmBtnText}>Confirm & Complete Check-Out</Text>
+                  <Text style={styles.confirmBtnText}>Submit EOD & Check Out</Text>
                 </>
               )}
             </TouchableOpacity>
@@ -476,12 +532,15 @@ const styles = StyleSheet.create({
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sectionTitle: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
   sectionHint: { fontSize: 12 },
-  tasksList: { gap: 8 },
+  tasksList: { gap: 10 },
   taskCard: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 16, borderWidth: 1 },
+  completedCard: { padding: 14, borderRadius: 16, borderWidth: 1.5, gap: 10 },
   checkbox: { width: 24, height: 24, borderRadius: 8, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   taskTitle: { fontSize: 14, fontWeight: '700' },
-  taskDesc: { fontSize: 12, marginTop: 2 },
-  taskMeta: { fontSize: 11, fontWeight: '600', marginTop: 4 },
+  taskMeta: { fontSize: 11, fontWeight: '600', marginTop: 3 },
+  descInputBox: { gap: 4, marginTop: 4 },
+  descInputLabel: { fontSize: 11, fontWeight: '700' },
+  descInput: { borderRadius: 10, borderWidth: 1, padding: 10, fontSize: 13, minHeight: 52, textAlignVertical: 'top' },
   emptyCard: { padding: 24, alignItems: 'center', justifyContent: 'center', gap: 8 },
   emptyTitle: { fontSize: 15, fontWeight: '800' },
   emptySub: { fontSize: 12, textAlign: 'center' },
@@ -497,4 +556,3 @@ const styles = StyleSheet.create({
   confirmBtn: { flexDirection: 'row', height: 54, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 10 },
   confirmBtnText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800' },
 });
-

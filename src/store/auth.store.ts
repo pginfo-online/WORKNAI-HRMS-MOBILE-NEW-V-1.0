@@ -50,9 +50,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   setAuth: async (user, accessToken, refreshToken) => {
     try {
-      await SecureStore.setItemAsync('accessToken', accessToken);
-      if (refreshToken) {
-        await SecureStore.setItemAsync('refreshToken', refreshToken);
+      try {
+        await SecureStore.setItemAsync('accessToken', accessToken);
+        if (refreshToken) {
+          await SecureStore.setItemAsync('refreshToken', refreshToken);
+        }
+      } catch {}
+
+      try {
+        await AsyncStorage.setItem('accessToken', accessToken);
+        if (refreshToken) {
+          await AsyncStorage.setItem('refreshToken', refreshToken);
+        }
+      } catch {}
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem('accessToken', accessToken);
+        if (refreshToken) window.localStorage.setItem('refreshToken', refreshToken);
       }
       await AsyncStorage.setItem('authUser', JSON.stringify(user));
       set({ user, isAuthenticated: true, isLoading: false });
@@ -71,8 +85,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   logout: async () => {
     try {
-      await SecureStore.deleteItemAsync('accessToken');
-      await SecureStore.deleteItemAsync('refreshToken');
+      try {
+        await SecureStore.deleteItemAsync('accessToken');
+        await SecureStore.deleteItemAsync('refreshToken');
+      } catch {}
+
+      try {
+        await AsyncStorage.removeItem('accessToken');
+        await AsyncStorage.removeItem('refreshToken');
+      } catch {}
+
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem('accessToken');
+        window.localStorage.removeItem('refreshToken');
+      }
       await AsyncStorage.removeItem('authUser');
     } catch (err) {
       console.error('Failed to clear storage during logout', err);
@@ -82,10 +108,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   loadAuthFromStorage: async () => {
     try {
-      const [token, userJson] = await Promise.all([
-        SecureStore.getItemAsync('accessToken'),
-        AsyncStorage.getItem('authUser'),
-      ]);
+      let token: string | null = null;
+      try {
+        token = await SecureStore.getItemAsync('accessToken');
+      } catch {}
+
+      if (!token) {
+        try {
+          token = await AsyncStorage.getItem('accessToken');
+        } catch {}
+      }
+
+      if (!token && typeof window !== 'undefined' && window.localStorage) {
+        token = window.localStorage.getItem('accessToken');
+      }
+
+      const userJson = await AsyncStorage.getItem('authUser');
 
       if (token && userJson) {
         const user = JSON.parse(userJson);

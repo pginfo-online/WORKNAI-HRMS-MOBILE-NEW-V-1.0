@@ -1,10 +1,11 @@
-# Welcome to your Expo app 👋
+# WorknAI HRMS Mobile
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+This is the WorknAI HRMS mobile application using Expo Router. The application entry point is
+`src/app/_layout.tsx`; do not publish or build this project from the repository parent directory.
 
 ## Get started
 
-1. Install dependencies
+1. From this `mobile` directory, install dependencies
 
    ```bash
    npm install
@@ -16,7 +17,18 @@ This is an [Expo](https://expo.dev) project created with [`create-expo-app`](htt
    npx expo start
    ```
 
-In the output, you'll find options to open the app in a
+The production build uses the embedded bundle on normal startup. EAS updates are checked only
+after an error recovery so a stale or incorrectly published OTA bundle cannot replace the app
+when it is reopened.
+
+For production releases, run EAS commands from this directory and use the `production` profile:
+
+```bash
+npx eas build --platform android --profile production
+npx eas update --channel production --message "release"
+```
+
+In development, you'll find options to open the app in a
 
 - [development build](https://docs.expo.dev/develop/development-builds/introduction/)
 - [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
@@ -24,16 +36,6 @@ In the output, you'll find options to open the app in a
 - [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
 
 You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
 
 ### Other setup steps
 

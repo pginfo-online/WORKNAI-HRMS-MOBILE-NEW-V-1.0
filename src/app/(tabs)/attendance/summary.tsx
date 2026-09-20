@@ -67,6 +67,10 @@ function AttendanceSummaryContent() {
         workMode: day?.record?.workMode || 'Office',
         isLate: day?.record?.isLate ? '1' : '0',
         lateMinutes: day?.record?.lateMinutes ? String(day.record.lateMinutes) : '0',
+        isEarlyCheckout: day?.record?.isEarlyCheckout ? '1' : '0',
+        earlyCheckoutMinutes: day?.record?.earlyCheckoutMinutes ? String(day.record.earlyCheckoutMinutes) : '0',
+        overtimeMinutes: day?.record?.overtimeMinutes ? String(day.record.overtimeMinutes) : '0',
+        shortfallMinutes: day?.record?.shortfallMinutes ? String(day.record.shortfallMinutes) : '0',
         isHoliday: day?.isHoliday ? '1' : '0',
         holidayName: day?.holidayName || '',
         isWeekOff: day?.isWeekOff ? '1' : '0',
@@ -128,12 +132,13 @@ function AttendanceSummaryContent() {
 
   const kpiItems = [
     { value: summary?.present ?? 0, label: 'Present', color: '#15803D' },
+    { value: summary?.halfDay ?? 0, label: 'Half Day', color: '#D97706' },
     { value: summary?.absent ?? 0, label: 'Absent', color: '#DC2626' },
-    { value: summary?.late ?? 0, label: 'Late', color: '#D97706' },
-    { value: summary?.halfDay ?? 0, label: 'Half Day', color: '#7C3AED' },
+    { value: summary?.late ?? 0, label: 'Late', color: '#B45309' },
+    { value: summary?.earlyCheckout ?? 0, label: 'Early Out', color: '#E11D48' },
     { value: summary?.weekOff ?? 0, label: 'Week Off', color: '#0369A1' },
     { value: summary?.holiday ?? 0, label: 'Holiday', color: '#DB2777' },
-    { value: (summary?.totalHours ?? 0).toFixed(0), label: 'Hours', color: colors.primary },
+    { value: `${summary?.attendancePercentage ?? 0}%`, label: 'Rate', color: colors.primary },
   ];
 
   return (
@@ -235,21 +240,46 @@ function AttendanceSummaryContent() {
                     const badgeBg = isAppr ? 'rgba(16,185,129,0.1)' : isRej ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
                     const badgeColor = isAppr ? colors.success : isRej ? colors.error : colors.warning;
                     return (
-                      <View key={corr._id} style={[styles.corrHistoryCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+                      <TouchableOpacity
+                        key={corr._id}
+                        disabled={isAppr || isRej}
+                        activeOpacity={0.7}
+                        onPress={() => {
+                          if (!isAppr && !isRej) {
+                            router.push({
+                              pathname: '/(tabs)/attendance/correction',
+                              params: {
+                                correctionId: corr._id,
+                                prefillDate: corr.date ? corr.date.substring(0, 10) : undefined,
+                                prefillReason: corr.correctionReason,
+                                prefillStatus: corr.requestedStatus,
+                                prefillInTime: corr.requestedInTime,
+                                prefillOutTime: corr.requestedOutTime,
+                              },
+                            });
+                          }
+                        }}
+                        style={[styles.corrHistoryCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
+                      >
                         <View style={{ flex: 1 }}>
-                          <Text style={[styles.corrHistDate, { color: theme.text }]}>
-                            {corr.date ? safeFormat(corr.date, 'dd MMM yyyy') : 'Request'}
-                          </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            <Text style={[styles.corrHistDate, { color: theme.text }]}>
+                              {corr.date ? safeFormat(corr.date, 'dd MMM yyyy') : 'Request'}
+                            </Text>
+                            {!isAppr && !isRej && (
+                              <Ionicons name="create-outline" size={14} color={colors.warning} />
+                            )}
+                          </View>
                           <Text style={[styles.corrHistReason, { color: theme.textSecondary }]} numberOfLines={1}>
                             {corr.correctionReason}
                           </Text>
                         </View>
                         <View style={[styles.corrStatusPill, { backgroundColor: badgeBg }]}>
                           <Text style={[styles.corrStatusText, { color: badgeColor }]}>
-                            {isAppr ? 'Approved' : isRej ? 'Rejected' : 'Pending HR'}
+                            {isAppr ? 'Approved' : isRej ? 'Rejected' : 'Pending HR (Edit)'}
                           </Text>
                         </View>
-                      </View>
+                      </TouchableOpacity>
                     );
                   })}
                 </View>

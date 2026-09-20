@@ -32,9 +32,7 @@ export default function HomeScreen() {
   const { theme } = useUIStore();
   const { tasks, fetchTodayTasks } = useTaskStore();
 
-  const [guideVisible, setGuideVisible] = useState(false);
   const [handbookModalVisible, setHandbookModalVisible] = useState(false);
-  const [guideStep, setGuideStep] = useState(0);
 
   const {
     data: dashData,
@@ -48,24 +46,7 @@ export default function HomeScreen() {
 
   useEffect(() => {
     fetchTodayTasks();
-    checkFirstLaunch();
   }, [fetchTodayTasks]);
-
-  const checkFirstLaunch = async () => {
-    try {
-      const seen = await AsyncStorage.getItem('hasSeenMobileHomeGuide');
-      if (!seen) {
-        setTimeout(() => setGuideVisible(true), 1200);
-      }
-    } catch (_) {}
-  };
-
-  const closeGuide = async () => {
-    setGuideVisible(false);
-    try {
-      await AsyncStorage.setItem('hasSeenMobileHomeGuide', 'true');
-    } catch (_) {}
-  };
 
   const record = dashData?.todayRecord;
   const isCheckedIn = !!record?.inTime && !record?.outTime;
@@ -90,28 +71,6 @@ export default function HomeScreen() {
     fetchTodayTasks();
   };
 
-  const guideSteps = [
-    {
-      title: 'Welcome to Workn HRMS 👋',
-      desc: 'Your central employee command center designed for seamless daily work management.',
-      icon: 'sparkles-outline' as const,
-    },
-    {
-      title: 'Shift & Attendance ⏱️',
-      desc: 'View your live shift status, punch in when arriving, and punch out with daily logs.',
-      icon: 'finger-print-outline' as const,
-    },
-    {
-      title: 'Task Hub & Progress 📋',
-      desc: 'Track assigned tasks, monitor completion rate, and sync deliverables automatically.',
-      icon: 'checkbox-outline' as const,
-    },
-    {
-      title: 'Leave & Balances 🏖️',
-      desc: 'Check your PTO & Comp-Off balances instantly and submit time-off requests.',
-      icon: 'calendar-outline' as const,
-    },
-  ];
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -122,12 +81,6 @@ export default function HomeScreen() {
         showLogo={true}
         rightAction={
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-            <TouchableOpacity
-              onPress={() => setGuideVisible(true)}
-              style={[styles.topIconBtn, { backgroundColor: theme.surfaceAlt }]}
-            >
-              <Ionicons name="help-circle-outline" size={20} color={theme.text} />
-            </TouchableOpacity>
             <TouchableOpacity
               onPress={() => router.push('/(tabs)/profile')}
               style={styles.avatarWrap}
@@ -408,64 +361,12 @@ export default function HomeScreen() {
         )}
       </ScrollView>
 
-      {/* Onboarding Guide Modal */}
-      <Modal visible={guideVisible} transparent animationType="fade">
-        <View style={styles.modalBackdrop}>
-          <View style={[styles.guideModalCard, { backgroundColor: theme.surface }]}>
-            <View style={styles.guideIconBubble}>
-              <Ionicons name={guideSteps[guideStep].icon} size={32} color={colors.primary} />
-            </View>
-            <Text style={[styles.guideModalTitle, { color: theme.text }]}>
-              {guideSteps[guideStep].title}
-            </Text>
-            <Text style={[styles.guideModalDesc, { color: theme.textSecondary }]}>
-              {guideSteps[guideStep].desc}
-            </Text>
-
-            <View style={styles.guideDotRow}>
-              {guideSteps.map((_, i) => (
-                <View
-                  key={i}
-                  style={[
-                    styles.guideDot,
-                    {
-                      backgroundColor:
-                        i === guideStep ? colors.primary : 'rgba(150,150,150,0.3)',
-                    },
-                  ]}
-                />
-              ))}
-            </View>
-
-            <View style={styles.guideBtnRow}>
-              <TouchableOpacity onPress={closeGuide} style={styles.guideSkipBtn}>
-                <Text style={styles.guideSkipText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  if (guideStep < guideSteps.length - 1) {
-                    setGuideStep(guideStep + 1);
-                  } else {
-                    closeGuide();
-                  }
-                }}
-                style={styles.guideNextBtn}
-              >
-                <Text style={styles.guideNextText}>
-                  {guideStep < guideSteps.length - 1 ? 'Next' : 'Got it!'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
       {/* Policies Modal */}
       <Modal visible={handbookModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={[styles.policyModalCard, { backgroundColor: theme.surface }]}>
             <View style={styles.policyModalHeader}>
-              <Text style={[styles.guideModalTitle, { color: theme.text }]}>
+              <Text style={[styles.policyModalTitle, { color: theme.text }]}>
                 Company Policies 📄
               </Text>
               <TouchableOpacity onPress={() => setHandbookModalVisible(false)}>
@@ -571,17 +472,7 @@ const styles = StyleSheet.create({
   policyTitle: { fontSize: 13, fontWeight: '800' },
   policySub: { fontSize: 11, marginTop: 2 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 20 },
-  guideModalCard: { width: '100%', maxWidth: 360, borderRadius: 24, padding: 24, alignItems: 'center', gap: 14 },
-  guideIconBubble: { width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(32,118,199,0.1)', alignItems: 'center', justifyContent: 'center' },
-  guideModalTitle: { fontSize: 18, fontWeight: '900', textAlign: 'center' },
-  guideModalDesc: { fontSize: 13, textAlign: 'center', lineHeight: 18 },
-  guideDotRow: { flexDirection: 'row', gap: 6, marginVertical: 8 },
-  guideDot: { width: 8, height: 8, borderRadius: 4 },
-  guideBtnRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', width: '100%', marginTop: 8 },
-  guideSkipBtn: { padding: 10 },
-  guideSkipText: { fontSize: 13, color: '#94A3B8', fontWeight: '700' },
-  guideNextBtn: { backgroundColor: colors.primary, paddingHorizontal: 20, paddingVertical: 10, borderRadius: 12 },
-  guideNextText: { color: '#FFFFFF', fontSize: 13, fontWeight: '800' },
+  policyModalTitle: { fontSize: 18, fontWeight: '900', textAlign: 'center' },
   policyModalCard: { width: '100%', maxWidth: 380, borderRadius: 24, padding: 20, gap: 16 },
   policyModalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   policyListItem: { flexDirection: 'row', gap: 12, paddingVertical: 12, borderBottomWidth: 1, alignItems: 'flex-start' },

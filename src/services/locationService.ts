@@ -117,11 +117,25 @@ export async function getLocation(options: LocationOptions = {}): Promise<Locati
     return _inflight;
   }
 
-  _inflight = _fetchLocation(options).finally(() => {
-    _inflight = null;
-  });
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT_MS;
+  // Bound the complete operation, including permission/service checks and fallback reads.
+  // Native location calls cannot always be cancelled, so keep the shared guard until the
+  // operation settles while ensuring callers always receive a terminal result.
+  const operation = _fetchLocation(options);
+  const timedOperation = _withTimeout(
+    operation,
+    timeout + 2_000,
+    () => ({ type: 'timeout' as LocationResultType, errorMessage: `Location timed out after ${(timeout + 2_000) / 1000}s.` }),
+  );
+  _inflight = timedOperation;
+  // Keep deduplication active until the native operation itself settles, even if
+  // the caller has already received the bounded timeout result.
+  operation.then(
+    () => { if (_inflight === timedOperation) _inflight = null; },
+    () => { if (_inflight === timedOperation) _inflight = null; },
+  );
 
-  return _inflight;
+  return timedOperation;
 }
 
 async function _fetchLocation(options: LocationOptions): Promise<LocationResult> {

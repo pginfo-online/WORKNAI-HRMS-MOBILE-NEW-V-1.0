@@ -29,7 +29,7 @@ export default function ApplyLeaveScreen() {
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [halfDay, setHalfDay] = useState(false);
-  const [halfDayPeriod, setHalfDayPeriod] = useState<'FirstHalf' | 'SecondHalf'>('FirstHalf');
+  const [halfDayPeriod, setHalfDayPeriod] = useState<'Morning' | 'Afternoon'>('Morning');
   const [reason, setReason] = useState('');
 
   const applyMutation = useMutation({
@@ -128,6 +128,39 @@ export default function ApplyLeaveScreen() {
             trackColor={{ false: theme.border, true: colors.primary }}
           />
         </Card>
+
+        {halfDay && (
+          <View style={styles.section}>
+            <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>Half Day Period</Text>
+            <View style={styles.typeGrid}>
+              {(['Morning', 'Afternoon'] as const).map((period) => (
+                <TouchableOpacity
+                  key={period}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setHalfDayPeriod(period);
+                  }}
+                  style={[
+                    styles.typeBtn,
+                    {
+                      backgroundColor: halfDayPeriod === period ? colors.primary : theme.surface,
+                      borderColor: halfDayPeriod === period ? colors.primary : theme.border,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.typeBtnText,
+                      { color: halfDayPeriod === period ? '#FFFFFF' : theme.text },
+                    ]}
+                  >
+                    {period}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        )}
 
         {/* Dates */}
         <Card style={styles.dateCard}>

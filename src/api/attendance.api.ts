@@ -3,7 +3,8 @@ import client from './client';
 export interface CheckInData {
   latitude?: number;
   longitude?: number;
-  workMode: 'Office' | 'WFH' | 'Field';
+  workMode: 'Office' | 'WFH';
+  tasks?: { title: string; priority?: string }[];
 }
 
 export interface CheckOutData {
@@ -13,6 +14,7 @@ export interface CheckOutData {
   pendingWork?: string;
   issuesFaced?: string;
   reportParticipants?: string[];
+  tasks?: any[];
 }
 
 export interface CorrectionRequestData {
@@ -36,14 +38,15 @@ export const attendanceApi = {
   getToday: () => client.get('/attendance/today'),
   checkIn: (data: CheckInData) => client.post('/attendance/check-in', data),
   checkOut: (data: CheckOutData) => client.post('/attendance/check-out', data),
-  trackLocation: (data: { latitude: number; longitude: number }) =>
-    client.post('/attendance/track', data),
   getMySummary: (params?: AttendanceSummaryParams) =>
     client.get('/attendance/my-summary', { params }),
   requestCorrection: (data: CorrectionRequestData) =>
     client.post('/attendance/correction', data),
+  editCorrection: (id: string, data: Partial<CorrectionRequestData>) =>
+    client.put(`/attendance/correction/${id}`, data),
   getPendingCorrections: () =>
     client.get('/attendance/corrections/pending'),
   getMyCorrectionHistory: () =>
     client.get('/attendance/my-corrections'),
 };
+

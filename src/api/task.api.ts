@@ -75,8 +75,6 @@ export const taskApi = {
   // Employee endpoints
   getTodaySessionTasks: () =>
     client.get<{ data: SessionTasksResponse }>('/tasks/session/today'),
-  getCarriedForwardTasks: () =>
-    client.get<{ data: TaskItem[] }>('/tasks/carried-forward'),
   createTask: (data: CreateTaskPayload) =>
     client.post<{ data: TaskItem }>('/tasks', data),
   updateTask: (id: string, data: UpdateTaskPayload) =>

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CONFIG } from '../constants/config';
 import { useAuthStore } from '../store/auth.store';
 
@@ -14,12 +15,30 @@ const client = axios.create({
 // Attach Token
 client.interceptors.request.use(async (config) => {
   try {
-    const token = await SecureStore.getItemAsync('accessToken');
+    let token: string | null = null;
+    try {
+      token = await SecureStore.getItemAsync('accessToken');
+    } catch {
+      // SecureStore not available on this platform
+    }
+
+    if (!token) {
+      try {
+        token = await AsyncStorage.getItem('accessToken');
+      } catch {
+        // AsyncStorage error
+      }
+    }
+
+    if (!token && typeof window !== 'undefined' && window.localStorage) {
+      token = window.localStorage.getItem('accessToken');
+    }
+
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
   } catch (err) {
-    console.error('Failed to get token from SecureStore', err);
+    console.error('Failed to get token from storage', err);
   }
   return config;
 });
@@ -61,16 +80,50 @@ client.interceptors.response.use(
       isRefreshing = true;
 
       try {
-        const refreshToken = await SecureStore.getItemAsync('refreshToken');
+        let refreshToken: string | null = null;
+        try {
+          refreshToken = await SecureStore.getItemAsync('refreshToken');
+        } catch {
+          // SecureStore not available
+        }
+
+        if (!refreshToken) {
+          try {
+            refreshToken = await AsyncStorage.getItem('refreshToken');
+          } catch {
+            // AsyncStorage error
+          }
+        }
+
+        if (!refreshToken && typeof window !== 'undefined' && window.localStorage) {
+          refreshToken = window.localStorage.getItem('refreshToken');
+        }
         if (!refreshToken) throw new Error('No refresh token');
 
         const { data } = await axios.post(`${CONFIG.API_BASE_URL}/auth/refresh`, { refreshToken });
         const newToken = data.data.accessToken;
         const newRefreshToken = data.data.refreshToken;
 
-        await SecureStore.setItemAsync('accessToken', newToken);
+        try {
+          await SecureStore.setItemAsync('accessToken', newToken);
+        } catch {}
+        try {
+          await AsyncStorage.setItem('accessToken', newToken);
+        } catch {}
+        if (typeof window !== 'undefined' && window.localStorage) {
+          window.localStorage.setItem('accessToken', newToken);
+        }
+
         if (newRefreshToken) {
-          await SecureStore.setItemAsync('refreshToken', newRefreshToken);
+          try {
+            await SecureStore.setItemAsync('refreshToken', newRefreshToken);
+          } catch {}
+          try {
+            await AsyncStorage.setItem('refreshToken', newRefreshToken);
+          } catch {}
+          if (typeof window !== 'undefined' && window.localStorage) {
+            window.localStorage.setItem('refreshToken', newRefreshToken);
+          }
         }
 
         processQueue(null, newToken);
